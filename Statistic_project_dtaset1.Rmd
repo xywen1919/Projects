@@ -1,0 +1,344 @@
+---
+title: "Final Project"
+author: "Xiaoyan Wen"
+date: "12/11/2020"
+output: word_document
+---
+
+```{r}
+library(readr)
+library(dplyr)
+library(tibble)
+library(ggbiplot) # for pca plotting
+library(ggplot2)
+library(pls)   # for pcr analysis
+library(abind)
+library(nnet) # for multinom regression
+library(MASS) # for polr regression, stepwise regression
+library(DAAG) # for cross-validation
+library(dendextend)
+library(factoextra)
+library(cluster) # different methods of clustering
+library(purrr) # for map function
+library(caret) # split training and test set
+library(neuralnet)
+library(nnet)
+library(treeio)
+library(ggtree)
+library(pheatmap)
+
+```
+
+# Dataset 1: train.csv.gz
+#1) Use PCA to reduce dimensions. How many components do you need to keep reproducing the digits reasonably well? what is your final matrix?
+```{r}
+# load the data
+train <- read.csv("train.csv", header = T)
+# subset based on label digits
+t0 <- train %>% slice(which(train$label == 0))
+t1 <- train %>% slice(which(train$label == 1))
+t2 <- train %>% slice(which(train$label == 2))
+t3 <- train %>% slice(which(train$label == 3))
+t4 <- train %>% slice(which(train$label == 4))
+t5 <- train %>% slice(which(train$label == 5))
+t6 <- train %>% slice(which(train$label == 6))
+t7 <- train %>% slice(which(train$label == 7))
+t8 <- train %>% slice(which(train$label == 8))
+t9 <- train %>% slice(which(train$label == 9))
+
+tgr <- list(t0, t1, t2, t3, t4, t5, t6, t7, t8, t9)
+```
+
+```{r}
+# create function for  z score calculating
+cal_z_score <- function(x){
+  (x - mean(x))/sd(x)
+}
+
+# for-loop to sampling and z-score transformation
+sn = 2                # sample n 
+ln = 3                # sampling times 
+s.t.zscore <- list()  # define a list to save result
+for (g in 1:10){
+  t <- as.data.frame(tgr[g])       # loop to read label-groups
+  
+  s.t <- NULL
+  for (s in 1:ln){                 # loop to perform multiple sampling
+    a <- slice_sample(t, n = sn)   # sampling the selected group
+    s.t <- rbind(s.t, a)           # row-bind the samples
+  }
+  
+  s.t.zscore[[g]] <- apply(s.t[,2:785], 1, cal_z_score)  # z-score transform
+}
+dim(s.t.zscore[[1]]); head(s.t.zscore[[1]])
+```
+
+```{r}
+# combine to make a training dataset 
+t.train <- NULL
+for (g in 1:10){
+  b <- cbind(t(s.t.zscore[[g]]), label = (g - 1))
+  t.train <- rbind(t.train, b)
+}
+dim(t.train)
+t.train <- as.data.frame(t.train)
+```
+
+```{r}
+# perform PCA
+pca.model <- prcomp(t.train, center = T, scale. = T)
+summary(pca.model)
+```
+
+```{r}
+ggbiplot(pca.model, var.scale = 1, obs.scale = 1,
+         groups = as.factor(t.train$label), 
+         ellipse = TRUE, circle = TRUE)
+```
+
+```{r}
+# decide how many principle components to use for regression model
+screeplot(pca.model, type = "lines", col = "blue")
+
+# percent explained variance
+expl.var <- round(pca.model$sdev^2/sum(pca.model$sdev^2)*100)
+expl.var       
+# 31 principal components could explain 96% variance
+```
+
+```{r}
+# try use 31 principal components for regression model
+pca31 <- pca.model$x[,1:31]
+pca31PC <- cbind(pca31, label = t.train[,785])
+
+pca31PC <- data.frame(pca31PC)
+modelPCA <- lm(label~ PC1+PC2+PC3+PC4+PC5+PC6+
+                 PC7+PC8+PC9+PC10+PC11+PC12+
+                 PC13+PC14+PC15+PC16+PC17+PC18+
+                 PC19+PC20+PC21+PC22+PC23+PC24+
+                 PC25+PC26+PC27+PC28+PC29+PC30+
+                 PC31, data = pca31PC)
+summary(modelPCA)
+```
+
+```{r}
+# stepwise regression ###
+step <- stepAIC(modelPCA, direction = "both")
+step$anova
+```
+#2) Draw a tree of the pixels and see if you can explain the results based on geometry of the pixels (how far apart are they in the 2-d space). Try to Explain the PCA results in the lights of this.
+```{r}
+# determining optimal clusters
+fviz_nbclust(t.train[,1:784], FUN = hcut, method = "wss")
+```
+
+```{r}
+#Euclidean Hierarchical clustering
+d <- dist(t.train[,1:784], method = "euclidean")
+h <- hclust(d, method = "complete")
+coef(h)
+
+plot(h, cex = .6, hang = -1)
+rect.hclust(h, k = 10, border = 2:11)
+```
+
+```{r}
+# Agglomerative hierarchical clustering =====
+# methods to assess
+q <- c("average", "single", "complete", "ward")
+names(q) <- c("average", "single", "complete", "ward")
+
+# fx to compute coefficient
+ac <- function(x){
+  agnes(t.train[,1:784], method = x)$ac
+}
+map_dbl(q, ac)
+
+hc <- agnes(t.train[,1:784], method = "ward")
+pltree(hc, cex = .6, hang = -1, main = "Dendrogram of agnes")
+rect.hclust(hc, k = 10, border = 2:11)
+```
+
+#3) Can you use some of the tools you have learn to build a classifier, so if you get a new set of pixels you can predict what is in the picture.
+# a. Split your dataset into two (a training set and a test set)
+```{r}
+# sampling
+ttrain <- NULL
+for (g in 1:30){
+  s <- slice_sample(train, n = 10)
+  ttrain <- rbind(ttrain, s)
+}
+dim(ttrain)
+
+# split training/test dataset
+sp <- createDataPartition(ttrain$label, p = 0.7, list = F) 
+ttrain_nn <- ttrain[sp,]
+ttest_nn <- ttrain[-sp,] 
+```
+
+# b. Build your classifier and figure out how well it does with the test data in predicting the digits.
+```{r}
+# data prepare
+
+# for label0~9 , encode a one vector of multilabel data
+ttrain_nn <- cbind(ttrain_nn[,2:785], class.ind(as.factor(ttrain_nn$label)))
+dim(ttrain_nn)
+ttest_nn <- cbind(ttest_nn[,2:785], class.ind(as.factor(ttest_nn$label)))
+dim(ttest_nn)
+
+# set labels names
+names(ttrain_nn) <- c(names(ttrain[,2:785]), "d0","d1","d2","d3","d4","d5","d6","d7","d8","d9")
+names(ttest_nn) <- c(names(ttrain[,2:785]), "d0","d1","d2","d3","d4","d5","d6","d7","d8","d9")
+
+# scale data
+# function
+scl <- function(x){
+  return(x - min(x))/(max(x) - min(x))
+}
+
+ttrain_nn[,1:784] <- as.data.frame(lapply(ttrain_nn[,1:784], scl))
+head(ttrain_nn[,783:794])
+ttest_nn[,1:784] <- as.data.frame(lapply(ttest_nn[,1:784], scl))
+head(ttest_nn[,783:794])
+```
+```{r}
+# set up formula
+nm <- names(ttrain_nn)
+ff <- as.formula(paste("d0+d1+d2+d3+d4+d5+d6+d7+d8+d9 ~",
+                       paste(nm[!nm %in% c("d0","d1","d2","d3","d4","d5","d6","d7","d8","d9")],
+                             collapse = "+")))
+ff
+```
+```{r}
+# fitting the model with neuralnet
+nn <- neuralnet(ff, 
+                data = ttrain_nn, 
+                hidden = c(93,56,29),
+                threshold = 0.05,
+                stepmax = 1e+06,
+                act.fct = "logistic", 
+                linear.output = F, 
+                lifesign = "minimal")
+```
+
+```{r}
+# compute predictions
+pr.nn <- compute(nn, ttest_nn[,1:784])
+
+# extract results
+ttest_nn_r <- cbind(ttest_nn[,785:794], 
+                    round(pr.nn$net.result, 3))
+
+names(ttest_nn_r) <- c("d0","d1","d2","d3","d4","d5","d6","d7","d8","d9",
+                       "d0","d1","d2","d3","d4","d5","d6","d7","d8","d9")
+dim(ttest_nn_r);head(ttest_nn_r)
+```
+
+```{r}
+# estimate accuracy from training set
+original_label <- max.col(ttest_nn_r[,1:10])
+estimate_label <- max.col(ttest_nn_r[,11:20])
+mean(original_label == estimate_label)
+```
+
+# c. Define the sensitivity and specificity of your classifier. How well does it recognize your own handwriting (make sure your handwriting is not in the training set)?
+```{r}
+# define scale function
+scl <- function(x){
+  return(x - min(x))/(max(x) - min(x))
+}
+
+# loop to sample x10 times, verify prediction accuracy
+
+vtable <- NULL
+vtest_nn_r <- NULL
+for(i in 1:10){
+  vtrain_nn <- NULL
+  vtest_nn <- NULL
+  vr <- NULL
+  
+  # sampling - split to training/test
+  vtrain <- slice_sample(train, n = 300)
+  sample_id <- sample(nrow(vtrain), nrow(vtrain)*0.7)
+  vtrain_n <- vtrain[sample_id,]
+  vtest_n <- vtrain[-sample_id,]
+  
+  # transform label0~9 to multilabel vector
+  vtrain_nn <- cbind(vtrain_n[,2:785], 
+                     class.ind(as.factor(vtrain_n$label)))
+  vtest_nn <- cbind(vtest_n[,2:785], 
+                    class.ind(as.factor(vtest_n$label)))
+  
+  # set labels names
+  names(vtrain_nn) <- c(names(vtrain_n[,2:785]), "d0","d1","d2","d3","d4","d5","d6","d7","d8","d9")
+  names(vtest_nn) <- c(names(vtest_n[,2:785]), "d0","d1","d2","d3","d4","d5","d6","d7","d8","d9")
+  
+  # scale transform
+  vtrain_nn[,1:784] <- as.data.frame(lapply(vtrain_nn[,1:784], scl))
+  vtest_nn[,1:784] <- as.data.frame(lapply(vtest_nn[,1:784], scl))
+  
+  # set up formula
+  vnm <- names(vtrain_nn)
+  vff <- as.formula(paste("d0+d1+d2+d3+d4+d5+d6+d7+d8+d9 ~",
+                         paste(vnm[!vnm %in% c("d0","d1","d2","d3","d4","d5","d6","d7","d8","d9")],collapse = "+")))
+  
+  # fit neuralnet model
+  vnn <- neuralnet(vff, 
+                  data = vtrain_nn, 
+                  hidden = c(93,56,29),
+                  threshold = 0.05,
+                  stepmax = 1e+06,
+                  act.fct = "logistic", 
+                  linear.output = F, 
+                  lifesign = "minimal")
+  
+  # prediction
+  pr.vnn <- compute(vnn, vtest_nn[,1:784])
+  
+  # extract results
+  vr <- cbind(vtest_nn[,785:794], pr.vnn$net.result)
+  vtable <- rbind(vtable, vr)
+  vtest_nn_r[i] <- mean(max.col(vtest_nn[,785:794]) == max.col(pr.vnn$net.result))
+}
+
+mean(vtest_nn_r)   # accuracy
+dim(vtable)
+```
+
+```{r}
+# side-by-side showing verification results
+names(vtable) <- c("d0","d1","d2","d3","d4","d5","d6","d7","d8","d9", 
+                   "ed0","ed1","ed2","ed3","ed4","ed5","ed6","ed7","ed8","ed9")
+vtable2 <- vtable
+vtable2[,11:20] <- apply(vtable2[,11:20], 1, function(x){ifelse(x == max(x), 1, 0)})
+head(vtable2)
+```
+```{r}
+# to calculate sensitivity / specificity
+# for-loop for each label0~9, count and write into true / false table 
+p_true_vtable <- NULL
+n_true_vtable <- NULL
+for (j in 1:10){
+  p_true <- count(vtable2[which(vtable2[,j] == 1),(10+j)] == 1)  # positive - true
+  p_true_vtable <- rbind(p_true_vtable, p_true$freq)
+  
+  n_true <- count(vtable2[which(vtable2[,j] == 0),(10+j)] == 0)  # negative - true
+  n_true_vtable <- rbind(n_true_vtable, n_true$freq)
+}
+dim(p_true_vtable); dim(n_true_vtable)   # check table dimension
+```
+```{r}
+# add column names, combine table
+colnames(p_true_vtable) <- c(paste("positive-", p_true$x, sep = ""))
+colnames(n_true_vtable) <- c(paste("negative-",n_true$x, sep = ""))
+true_false_vtable <- cbind(p_true_vtable, n_true_vtable)
+rownames(true_false_vtable) <- c(paste("label", 0:9, sep = ""))
+true_false_vtable <- as.data.frame(true_false_vtable)
+
+# calculate sensitivity and specificity 
+true_false_vtable$sensitivity <- round(true_false_vtable$`positive-TRUE`/(true_false_vtable$`positive-FALSE` + true_false_vtable$`positive-TRUE`), 3)
+true_false_vtable$specificity <- round(true_false_vtable$`negative-TRUE`/(true_false_vtable$`negative-FALSE` + true_false_vtable$`negative-TRUE`), 3)
+
+true_false_vtable  # result table
+```
+

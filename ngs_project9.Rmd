@@ -1,0 +1,328 @@
+---
+title: "NGS_assignment_wk9"
+author: "Xiaoyan Wen"
+date: "3/31/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+### Next Generation Sequence Analysis Homework Week 9
+
+This week you will continue working with the RNA-seq analysis from Week 8. Last week, you aligned RNA-seq reads from date palm fruit to the date palm reference genome. This week, you will conduct a test of differential gene expression (DGE) between samples from the four date palm varieties with high sucrose content versus the four with low sucrose content described in Week 8.
+
+Before proceeding with this exercise, please watch the pre-recorded screencast on NYU Classes that gives hands-on tutorial for running DESeq2 interactively at the R console. Please also see the vignette on conducting DGE with DESeq2 here:
+
+<http://bioconductor.org/packages/release/bioc/vignettes/DESeq2/inst/doc/DESeq2.html>
+
+**The above vignette is the main resource for learning how to conduct DGE with DESeq2 and is referenced throughout the assignment below.**
+
+#### About the data
+
+The RNA-seq data are from date palm fruit. In this experiment, researchers tested for differential gene expression between types ("varieties") of date palm with high fruit sucrose content (n=4) versus those with trace (very low) amounts of sucrose (n=4). The goal was to determine if a group of linked invertase enzymes identified by Genome Wide Association Study (GWAS) showed DGE between varieties with the two sugar phenotypes and might therefore cause the sugar composition phenotype.
+
+The RNA-seq data in this experiment were generated on a NextSeq sequencer, processed to exclude reads that failed Illumina's quality control filter, and then adapters removed with Trimmomatic. Reads were aligned with STAR. A read count matrix was created from each sample BAM with htseq-count for you by your instructor.
+
+#### Getting Started with DESeq2
+
+In this assignment we will conduct DGE with DESeq2 using raw count data as input. It is important to recognize that the input data for DESeq2 must not be adjusted/normalized and should reflect the counts of reads mapping to each feature (gene) separately for each sample. Your instructor ran htseq-count on a set of STAR alignments and produced raw counts for each sample. You can read more about htseq-count here:
+
+<https://htseq.readthedocs.io/en/release_0.11.1/count.html>
+
+In this assignment, you will execute commands interactively via RStudio on your personal computer or from R an console on the HPC. Your instructor recommends working working on your personal computer for this assignment
+
+You can find the htseq-count matrices at `/scratch/work/courses/BI7653/hw9.2022/htseq_count`
+
+The htseq-count files must be saved to a single directory in order for the functions below to execute without modification.
+
+If working on your personal computer you will also need to install DESeq2 from Bioconductor:
+
+<https://bioconductor.org/packages/release/bioc/html/DESeq2.html>
+
+If you are working on the HPC, you can load the module `r/gcc/4.0.4`, which has DESeq2 version 1.30.0 already installed.
+
+#### Task 1: Create a DESeqDataSet object
+
+In order to conduct a test of DGE, we need to provide DESeq2 with read counts per feature (e.g., htseq-count output files), sample information, and the experimental design. DESeq2 requires these components be stored as a DESeqDataSet object.
+
+DESeq2 uses different functions to contruct a DESeqDataSet object depending on the input data format such as if you have a single count matrix (see example in the pre-recorded screencast) or an htseq-count input file for each sample etc.
+
+Please read the section "htseq-count input" in the DESeq2 vignette referenced above before proceeding.
+
+Step 1: Construct a data frame with sample information
+
+In the "htseq-count input" section review how to construct a sample table. The sample table includes, the htseq-count file names, the sample names, and which treatment (e.g., treatment or control) each sample belongs. In our case the conditions are the different types of fruit based on their sugar composition.
+
+The code below will produce a sample table. The sampleFiles variable must be a vector with samples in the specified order because the sampleCondition variable defines the sugar-type of each sample assuming that order (i.e., the first four samples are high sucrose and the last four are low sucrose samples)
+
+```{r}
+    sampleFiles <- paste(c('PDAC253','PDAC282','PDAC286','PDAC316','PDAC266','PDAC273','PDAC306','PDAC318'),
+                         '.htseq_count.txt',
+                         sep="")
+    sampleCondition <- c(rep('highSucrose',4), rep('lowSucrose',4))
+    sampleTable <- data.frame(sampleName = sampleFiles,
+                              fileName = sampleFiles,
+                              condition = sampleCondition)
+```
+
+
+Step 2: Read htseq-count files
+
+In the "htseq-count input" section of the vignette, there is an example of the function **DESeqDataSetFromHTSeqCount**. This function uses the sampleTable variable as an argument to read the htseq-count files. Please specify this function along with the full path (in quotes) to the directory where your htseq-count files are located. Note also the `design` argument, which specifies which samples are high and low sucrose samples (i.e. "treatment" and "control" samples)
+```{r}
+library(DESeq2)
+dds <- DESeqDataSetFromHTSeqCount(sampleTable = sampleTable,
+                                  directory = '/scratch/work/courses/BI7653/hw9.2022/htseq_count',
+                                  design = ~ condition)
+```
+
+This function constructs an analysis of the following model:
+
+\[ Y=B_1X+B_o \] where \(B_1\) is the coefficient (=fold-change) for the treatment of fruit sugar type (high sucrose or low sucrose).
+
+Below, we will test the null hypothesis that there is no effect of sugar type (i.e, \(B_1\) = 0) on gene expression for each gene in the genome annotation. In the DESeq2 framework, we are testing the null hypothesis of a fold-change of zero separately for each gene in the genome between high sucrose and low sucrose fruits.
+
+Q1.1 Execute the following:
+```{r}
+class(dds) # Determine the type of object
+dds
+```
+
+
+Q1.1. Report the output indicating what type of object the `dds` variable is, how many genes, and how many samples are stored in the object? [ 1 point ]
+*Answer**: the type of object "dds" is "package".
+        there are 28595 genes and 8 samples stored in the object.
+
+#### Task 2: Pre-filter low count genes, normalize counts and run DESeq
+
+When conducting DGE, it is often desirable to remove low count genes. The reason for this is that low count genes cannot be inferred as differentially expressed. Removing these genes will help reduce the multiple-testing burden (see below).
+
+Try removing genes with 10 or fewer reads as follows:
+```{r}
+keep <- rowSums(counts(dds)) >= 10
+dds <- dds[keep,]
+```
+
+Now you will run the **DESeq wrapper function**. This function estimates 
+- size factors (scaling factors used in DESeq2 normalization), 
+- dispersions for each gene, and 
+- conducts a Wald Test of DGE using the normalized count data. 
+These internal functions can also be run individually if you ever wanted to customize each function. The details of the functions are available in the help pages (see ?estimateSizeFactors, ?estimateDispersions, ?nbinomWaldTest). Review these help pages along with the pre-recorded videos to gain more insight into your analysis.
+
+Execute the wrapper function following the approach in the vignette which overwrites the existing dds variable. This adds additional outputs to the dds object while retaining the original information.
+
+```{r}
+dds <- DESeq(dds)
+class(dds) # Determine the type of object
+```
+
+The `dds` object is now populated with the information required to analyze the data. In addition, we can extract a matrix of raw counts or normalized counts per feature. The normalized counts were calculated using the **median-of-ratios method** of DESeq2; see pre-recorded video and ?estimateSizeFactors).
+
+```{r}
+rawcounts.matrix <- counts(dds,normalized=F)
+normalizedcounts.matrix <- counts(dds,normalized=T)
+class(rawcounts.matrix)
+```
+
+Q2.1 Enter `dds` at the console to summarize your object. Report the output for your answer and how many genes were retained after removing the low count genes [ 1 point ].
+```{r}
+dds
+```
+*Answer**: 20029 genes were retained after removing the low count genes.
+
+#### Task 3: Analyze DGE data
+
+A common first task to analyzing DGE data is to cluster samples using hierarchical clustering and Principal Components Analysis (PCA). This can help provide an indication of the distances between sample gene expression profiles and help detect potential batch effects.
+
+Developers of DESeq2 recommend that the normalized count matrix should be *transformed** with "regularized log" (?rlog) or "variance stabilizing" (?varianceStabilizingTransformation) transformation before clustering. Obviously, you would never cluster raw (un-normalized) counts because library size differences would largely explain the clustering of samples. These transformations are for clustering/machine learning applications only and are not used in the statistical analysis of DGE. Read more in the "Data transformations and visualization" section of the DESeq2 vignette listed above.
+
+For example, the following code block will "rlog" transform the normalized counts and perform hierarchical clustering of samples:
+
+```{r}
+rld <- rlog(dds)
+dists <- dist(t(assay(rld)))
+plot(hclust(dists))
+```
+
+
+Now cluster samples using the plotPCA function (?plotPCA) and color the points by high or low sucrose content samples (coloring should be done by default).
+
+Q3.1 Include the hierarchical clustering result, your plotPCA command, and the PCA plot for you answer [ 1 point ].
+*Answer**: please find the hierarchical clustering result above. And the plotPCA as following:
+
+```{r}
+plotPCA(rld)
+```
+
+Q3.2 Now answer the following [ 2 points ].
+
+Q3.2a Do the samples cluster by sugar composition phenotype in the hierarchical clustering? Explain.
+*Answer**: No, the samples are not clustered by sugar composition phenotype in the hierarchical clustering. clearly, there are 3 clusters: PDAC266 is different from other 7 samples, and then PDAC286, PDAC282, PDAC316 are different from the rest of 4 samples. this nature of clustering is completely different from the sugar composition phenotype which should include two clusters: high vs. low sugar composition.
+
+Q3.2b Does the PCA separate samples by sugar composition? If so, on which axis? Select the single best answer.
+*Answer**: 2
+
+1.  No. The PCA does not separate the treatments on either access.
+
+2.  Yes. The PCA separates all points on the PC1 axis
+
+3.  Yes. The PCA separates all points on the PC2 axis.
+
+4.  Yes. The PCA mostly separates points on PC1 except one outlier.
+
+5.  Yes. The PCA mostly separates points on PC2 except one outlier.
+
+6.  Yes. The PCA separates points on both PC1 and PC2 axes.
+
+7.  None of the above.
+
+Q3.2c In many contexts, the treatment will induce large effects on the transcriptome that often cause biological replicates from the same treatment to cluster together. Another factor that could cause samples to cluster together is batch effects. Which of the following are potential sources of batch effects in RNA-seq analysis?
+*Answer**: 6
+
+1.  sequencer effects (libraries sequenced on different sequencing machines)
+
+2.  lane effects (libraries sequenced on different lanes)
+
+3.  day effects (libraries are prepared on different days)
+
+4.  reagent effects (libraries are prepared from different batches of reagents)
+
+5.  technician effect (libraries are prepared by different technicians)
+
+6.  all of the above
+
+Q3.2d Without any additional information about how the experiment was conducted, do you see any evidence of a batch effect? Why or why not?
+*Answer**: Yes, I see evidence of batch effect. Ideally, samples within same designed group should be in the same cluster. data clustered by batches instead of group indicate a batch effect.
+
+Results from the DESeq2 analysis can be extracted from the DESeqDataSet object using the `results` function.
+```{r}
+res <- results(dds, contrast = c('condition','lowSucrose','highSucrose') )
+class(res) 
+```
+
+Now, sort the data ascending on p-value. Note that DESeqResults objects are data.frame-like and can be sorted similar to data.frame objects.
+
+```{r}
+resOrdered <- res[order(res$pvalue),] 
+head(resOrdered,10) # View the 10 most significant genes
+```
+
+You now have an ordered `DESeqResults` object with most significant differentially expressed gene at the top.
+
+DESeq2 performs automated filtering to remove problematic genes that can bias results. For example, certain features of RNA-seq count data such as zero counts in some samples for a gene or vary high variance in expression across samples for a gene can introduce problems for statistical testing. The results function of DESeq2 identifies some of the genes displaying these problematic features by conducting "independent filtering"--an automated filtering process that causes p-values and/or adjusted p-values to be set to NA.
+
+Q3.3 Read the section "More information on results columns" of the DESeq2 vignette and describe three quality control steps that are automatically conducted by DESeq to drop from consideration genes with suspect, or problematic, p-values. How many genes were impacted by the default independent filtering? [ 1 point ].
+*Answer**:some values in the results table can be set to NA by automatic independent filter for one of the following reasons:
+* If within a row, all samples have zero counts, the baseMean column will be zero, and the log2 fold change estimates, p value and adjusted p value will all be set to NA.
+* If a row contains a sample with an extreme count outlier then the p value and adjusted p value will be set to NA. 
+* If a row is filtered by automatic independent filtering, for having a low mean normalized count, then only the adjusted p value will be set to NA. 
+
+showing below, there are 2908 genes were impacted by the default filtering.
+```{r}
+sum(is.na(res$padj))
+```
+
+The genes of interest in this experiment are three invertase genes that are located in a Quantitative Trait Locus (QTL) region approximately 1 Mb in size on chromosome 14 in the date palm genome. Invertase catalyzes the conversion of sucrose to fructose and glucose. We would like to know which (if any) of these genes are differentially expressed between sugar types and might control the sugar composition phenotype.
+
+The gene identifiers of the candidates are:
+
+Pdac_HC_chr14G0022900 (cell wall invertase enzyme)
+
+Pdac_HC_chr14G0023100 (cell wall invertase enzyme)
+
+Pdac_HC_chr14G0028200 (alkaline/neutral invertase enzyme)
+
+Subset the `resOrdered` DESeqResults object the same as you might a data.frame noting that genes are row names.
+```{r}
+    resOrdered[ row.names(resOrdered) %in% c('Pdac_HC_chr14G0022900','Pdac_HC_chr14G0023100','Pdac_HC_chr14G0028200'), ]
+```
+
+Now, consider how to interpret the log2FoldChange column of output. An important consideration is the `contrast` argument to the `results` function (see above). The purpose of this argument is to allow you to interpret log2 fold-change (lfc) values. For example, if a gene has a log2 fold-change between treatments of 2, that would imply a four-fold increase in one treatment over the other.
+
+However, without additional information, its unclear which treatment has the higher expression treatment or control, or in our case high sucrose or low sucrose fruit samples.
+
+To answer this question, we need to know how the numerator and denominator are defined by the contrast argument. Read the documentation for the results function (?results; contrast argument) to assist in interpreting the fold-change values ("log2FoldChange" column in output).
+*Answer**: the contrast argument in results function definds three elements as: the name of a factor in the design formula, the name of the numerator level for the fold change, and the name of the denominator level for the fold change.
+
+
+Q3.4a. Report the table of results for the three candidate genes. For each of the candidate genes, which sugar-type (high sucrose or low sucrose) has higher expression? What is the fold-change expressed on the decimal scale (convert from log2 to linear scale)? [ 1 point ]
+*Answer**: thus, in this case (contrast = c('condition','lowSucrose','highSucrose')) could be interpreted as: log2FoldChange = log2(lowSucrose/highSucrose). 
+
+```{r}
+top3gene_res <- resOrdered[ row.names(resOrdered) %in%                              c('Pdac_HC_chr14G0022900','Pdac_HC_chr14G0023100','Pdac_HC_chr14G0028200'), ]
+
+top3gene_res$FoldChange <- 2**(top3gene_res$log2FoldChange)
+top3gene_res[,c('FoldChange','padj')]
+```
+for all three genes low sucrose has higher expression with the first two genes having statistical significance. The fold change for each gene are listed in the FoldChange column as above.
+
+
+Q3.4b Sometimes its useful to report the normalized counts for each gene as a figure or table. For your answer, report the normalized counts for each candidate gene as a table [ 1 point ].
+
+```{r}
+print('gene Pdac_HC_chr14G0023100')
+plotCounts(dds, gene='Pdac_HC_chr14G0023100', intgroup="condition", returnData=TRUE)
+```
+```{r}
+print('gene Pdac_HC_chr14G0022900')
+plotCounts(dds, gene='Pdac_HC_chr14G0022900', intgroup="condition", returnData=TRUE)
+```
+```{r}
+print('gene Pdac_HC_chr14G0028200')
+plotCounts(dds, gene='Pdac_HC_chr14G0028200', intgroup="condition", returnData=TRUE)
+```
+
+Now consider the fold-change estimates in the results.
+
+In the pre-recorded video, your instructor described how DESEq2 log2 fold-change estimates are frequently over-estimated particularly for low expression genes. To obtain better estimates of the log2 fold-change, DESeq2 recommends "shrinking" the raw fold-change estimates DESeq2 makes available the lfcShrink function to extract results from a DESeqDataSet object with shrunken log2 fold-change estimates. Note, this function behaves similarly to the `results` function, except that it returns shrunken log2 fold-change estimates.
+```{r}
+res.shrunk <- lfcShrink(dds, contrast = c('condition','lowSucrose','highSucrose'),type = "ashr" )
+res.shrunkOrdered <- res.shrunk[order(res.shrunk$pvalue),]
+```
+Now, confirm that the only result that has changed in top 5 genes is the log2 fold-change using results function versus the lfcShrink function:
+```{r}
+resOrdered
+res.shrunkOrdered
+```
+Q3.5 Use the plotMA function to generate MA plots for the `res` and `res.shrunk` objects. Report the plots in your assignment document and answer the question, why is it appropriate to report the shrunken estimates? [ 1 point ].
+*Answer**: it is appropriate to report the shrunken estimates because it could correct the over-estimated folde change especially for low expression genes. 
+```{r}
+par(mfrow=c(1,2))
+plotMA(res, main="res")
+plotMA(res.shrunk, main="res.shrunk")
+```
+
+#### Task 4. The multiple testing problem
+
+In statistics, raw p-values are the probability of rejecting the null hypothesis when the null hypothesis is true (Type I error). In this case, using the standard alpha value of 0.05 as significance threshold means that there is a 5% chance of a type I error. When large numbers of independent tests (i.e., genes) are conducted, the probability of conducting one or more type I errors scales positively with the number of tests. In a DGE analysis, 5% of genes would be expected to be inferred as differentially expressed when they are not. This is an unacceptably large number of Type I errors. This is what is known as the multiple testing, or multiple comparisons problem.
+
+There are a number of strategies to address this problem and reduce the number of false positives. In RNA-seq analysis, it is typical to use the False Discovery Rate (FDR). Internally, DESeq2 will perform the False Discovery Rate (FDR) correction by running the p.adjust R core function (?p.adjust) on the raw p-values (pvalue column) using the Benjamin-Hochberg ("BH") method. The output is reported in the "padj" column and is the adjusted p-value (i.e., the FDR).
+
+So how do we interpret the padj column? The FDR is unrelated to the p-value and its interpretation is different. Instead of setting a desired alpha, we instead identify what proportion of the significant tests we are willing to accept are false positives. For example, if we are willing to accept that 5% of our inferred differentially expressed genes are false positives, we would set our critical value for the padj column at 0.05. Any gene with a padj (i.e., FDR) value less than this is considered significant and we infer to be a differentially expressed gene. If we want to be more strict, we could set our FDR threshold at 0.01. At this threshold, any gene with padj value less than 0.01 is considered significant as 1% or less of these genes are expected to be false positives.
+
+The FDR question has been discussed on SeqAnswers. This is a useful message board for addressing all questions related to NGS. Please have a look:
+
+<http://seqanswers.com/forums/showthread.php?t=23049>
+
+Q4.1 Subset the table with "shrunken" log2 fold-change estimates to include only the candidate genes and answer the following [ 1 point ]:
+
+Q4.1a. Report your results from the lfcShrink output table for the candidate genes.
+```{r}
+top3gene_res_shrunk <- res.shrunkOrdered[ row.names(res.shrunkOrdered) %in%                              c('Pdac_HC_chr14G0022900','Pdac_HC_chr14G0023100','Pdac_HC_chr14G0028200'), ]
+top3gene_res_shrunk
+```
+
+Q4.1b. Statisticians make the distinction between statistically signficant and biologically significant. Using a criterion that a statistically differentially expressed gene must also show at least a two-fold change in expression (on linear scale) to be biologically meaningful, which genes do you consider to be differentially expressed? Please specify the gene(s), the FDR threshold you applied.
+*Answer**: the genes that are considered to be differentially expressed:                    - Pdac_HC_chr14G0023100, Pdac_HC_chr14G0022900. 
+- The FDR threshold applied: padj < 0.05.
+```{r}
+subset(top3gene_res_shrunk, log2FoldChange > 1 & padj < 0.05)
+```
+
+Q4.1c Which of the candidate genes do you think could be responsible for the sugar composition trait on the chromosome 14 sugar QTL?
+**Answer**: two significantly differentiated genes Pdac_HC_chr14G0023100 and Pdac_HC_chr14G0022900 are closely associated  but not necessarily the causal relationship with with sugar composition trait. So they could be responsible for the trait but further experiment needs to be carried to confirm. 
+
+
+#### You are finished, upload the answers in a .html file (preferred) or a text, word, or pdf with naming convention \_homework_week9.html,.docx, or .pdf at the link provided for homework 9 in the Assignments section on the NYU Classes webpage.

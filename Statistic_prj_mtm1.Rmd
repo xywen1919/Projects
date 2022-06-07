@@ -1,0 +1,240 @@
+---
+title: "Midterm Project_1"
+author: "Xiaoyan Wen"
+date: "10/23/2020"
+output: word_document
+---
+```{r}
+#read the data to train
+train <- read.csv("train.csv", header = T, stringsAsFactors=FALSE)
+```
+
+```{r}
+# 1) convert the pixel data into pictures using plot
+# image the fist row
+m_pixel0 <- matrix(as.numeric(train[1,c(2:785)]), ncol = 28) # convert to matrix
+
+#image the 28x28 picture with gray scale
+image(m_pixel0, col = gray.colors(255, start = 0, end = 1, gamma = 2.2), useRaster = T, axes = F)
+```
+
+```{r}
+#image the last row
+m_pixel42000 <- matrix(as.numeric(train[42000,c(2:785)]), ncol = 28)
+
+image(m_pixel42000, col = gray.colors(255, start = 0, end = 1, gamma = 2.2), useRaster = T, axes = F)
+```
+
+```{r}
+#image the 300th row
+m_pixel300 <- matrix(as.numeric(train[300,c(2:785)]), ncol = 28)
+
+image(m_pixel300, col = gray.colors(255, start = 0, end = 1, gamma = 2.2), useRaster = T, axes = F)
+```
+
+```{r}
+# 2) separate the data by digits, calculate mean value for each pixel
+library(dplyr)
+library(tibble)
+g_train <- group_by(train, label) # group by label digit
+g_train_mean <- summarise_all(g_train, mean) # calculate the averages for each pixel/grouped by label
+g_train_mean <- column_to_rownames(as.data.frame(g_train_mean), "label") # use label col as row name
+dim(g_train_mean)  # check dimension and view data
+```
+
+```{r}
+ #plot the average value for each label-digit
+par(mfrow = c(2, 5))
+for (i in 1:10){
+  matrix_group_mean <- matrix(as.numeric(g_train_mean[i,]), ncol = 28)
+  image(matrix_group_mean, col = gray.colors(255, start = 0, end = 1, gamma = 2.2), useRaster = T, axes = F)
+}
+```
+
+# 3) Find which columns have the most variance and which have the least
+```{r}
+# a-a) Find the most and least variance of pixel in the whole data-set
+
+# calculate var/mean for each column 
+all_train_var <- summarise_all(train, var)
+all_train_var$label <- NULL                           # drop the label col
+all_train_mean <- summarise_all(train, mean)
+all_train_mean$label <- NULL                          # drop the label col
+
+# add variance and mean as rows to "all_train_sta"
+all_train_sta <- add_row(all_train_var, all_train_mean)
+rownames(all_train_sta) <- c("variance", "mean")
+
+# find out maximum and minimum variance
+max_all_var <- max(all_train_var)
+min_all_var <- min(all_train_var)
+
+# find out column names for maximum and minimum variance
+t_all_train_sta <- data.frame(t(all_train_sta))     #transpose the data
+max_allpixel_name <- rownames(t_all_train_sta[t_all_train_sta$variance == max_all_var,])
+min_allpixle_name <- rownames(t_all_train_sta[t_all_train_sta$variance == min_all_var,])
+
+max_allpixel_name
+min_allpixle_name
+```
+
+```{r}
+# a-b) Find the most and least variance of pixel for each digit (0-9)
+
+# calculate variance for each column grouped by label 
+g_train_var <- summarise_all(g_train, var)
+
+# use label column as row name 
+g_train_var <- column_to_rownames(as.data.frame(g_train_var), "label")
+
+
+# find maximum and minimum variance for each label (0~9)
+g_max_var <- apply(g_train_var, 1, max)
+g_min_var <- apply(g_train_var, 1, min)
+
+# identify index for max and min
+max_row_col_ind <- c()
+for (i in c(1:10)){
+  ind <- which(g_train_var == g_max_var[i], arr.ind = T)
+  max_row_col_ind <- rbind(max_row_col_ind,ind)
+}
+max_row_col_ind     # index for max
+
+```
+
+```{r}
+# all the min_var equal to zero
+min_row_col_ind <- which(g_train_var == g_min_var[1], arr.ind = T)  # find index for zero 
+head(min_row_col_ind)
+nrow(min_row_col_ind) # there are multiple zeros for each digit, count the total index number   
+
+#  summarized index by digit(label 0~9)
+library(tidyr)
+min_row_col_ind <- as.data.frame(min_row_col_ind)
+min_row_col_ind_wide <- pivot_wider(min_row_col_ind, names_from = row, values_from = col, values_fn = list) 
+min_row_col_ind_wide[[1]]     # representatively show col-index for digit 1
+```
+
+# replace the columns with the lowest variability by their average value
+```{r}
+# 1) replace the low_var_columns for each column by their average value and save to "min2mean_train"
+
+min_col_ind <- which(all_train_sta[1,] == min_all_var, arr.ind = T)[,2]  # # col-index for meanvar = min 
+min_col_ind
+```
+
+```{r}
+min2mean_train <- train        # set initial value to the transformed "train" data
+n <- 0
+
+for (c in min_col_ind){
+  average_value <- all_train_sta[2, c]
+  col_index <- (c + 1)
+  min2mean_train[ , col_index] <- average_value
+  n <- (n + 1)
+}
+print(n)                     # check number of columns in which the number have changed to col-mean
+dim(min2mean_train)          # dimension of the final data set
+```
+
+```{r}
+## Find the least variance of pixel over the whole data-set
+
+# calculate var/mean for each column 
+all_min2mean_train_var <- summarise_all(min2mean_train, var)
+all_min2mean_train_var$label <- NULL                           # drop the label col
+
+
+# find out minimum variance
+min_all_min2mean_var <- min(all_min2mean_train_var)
+
+# find out column names for maximum and minimum variance
+min_all_min2mean_pixle_name <- colnames(all_min2mean_train_var, which(all_min2mean_train_var[1,] == min_all_min2mean_var))
+
+setdiff(min_allpixle_name, min_all_min2mean_pixle_name)   # check the difference between original and new data set
+```
+```{r}
+# 2) replace the low_var_columns for each label_digit by their average value -> "min2mean_g_train"
+n <- 0
+min2mean_g_train <- train   # set initial value to the transformed "train" data
+
+
+for (r in c(1:10)){                       # for every label-digit
+  c_index <- min_row_col_ind_wide[[1,r]]     # read col_index from each label_index (1 ~ 10)
+  c_index <- as.vector(deframe(c_index))     # transform col_index to vector
+
+  for (c in c_index) {                    # for every col_index
+    average_value <- g_train_mean[r,c]    # read mean value
+    row_index <- which(min2mean_train[,1] == (r - 1))    # set row_index
+    col_index <- (c + 1)                                 # set col_index
+    min2mean_g_train [row_index, col_index] <-  average_value    # substrate the min_var cloumns with mean_value
+    n <- (n + 1)
+  }
+  print (r)     # for each digit
+  print (n)     # how many values have been changed to mean
+}
+dim(min2mean_g_train)                     # check the dimension of the new data
+```
+
+
+```{r}
+# a-b) Find the most and least variance of pixel for each digit (0-9)
+
+# calculate variance for each column grouped by label 
+min2mean_g_train <- group_by(min2mean_g_train, label)
+min2mean_g_train_var <- summarise_all(min2mean_g_train, var)
+
+# use label column as row name 
+min2mean_g_train_var <- column_to_rownames(as.data.frame(min2mean_g_train_var), "label")
+
+
+# find minimum variance 
+min2mean_g_min_var <- min(min2mean_g_train_var)
+
+# identify index for max and min
+min2mean_min_row_col_ind <- which(min2mean_g_train_var == min2mean_g_min_var, arr.ind = T)  # index for min 
+min2mean_min_row_col_ind <- as.data.frame(min2mean_min_row_col_ind)       # transfer char to data.frame
+library(arsenal)
+summary(comparedf(min_row_col_ind, min2mean_min_row_col_ind)) # summary the difference between original and new data set
+```
+
+```{r}
+##d) How many columns have average values close to 255 or 0 ?
+# for all_train data:
+col_index_255 <- which(all_train_sta[2,] == 255)
+length(col_index_255)         # for all data set, the number of columns have average value close to 255
+
+col_index_0 <- which(all_train_sta[2,] == 0)
+length(col_index_0)          # for all data set, the number of columns have average value close to 0
+
+
+# for g_train data:
+row_col_index_255 <- which(g_train_mean == 255, arr.ind = T)
+nrow(row_col_index_255)  # for grouped_by_digits data set, the number of columns have average value close to 255
+
+row_col_index_0 <- which(g_train_mean == 0, arr.ind = T)
+nrow(row_col_index_0)   # for grouped_by_digits data set, the number of columns have average value close to 0
+```
+
+
+
+```{r}
+# 4) present a program that prints out digits in your handwriting
+library(jpeg)
+img <- readJPEG("Screenshot211856.jpg")   # read the image file
+dim(img)                                  # check the dimension
+
+image(t(apply(img[c(1:dim(img)[1]), c(1:dim(img)[2]), 1], 2, rev)), col=grey.colors(255), axes=F, asp=1)
+```
+
+
+
+
+
+
+
+
+
+
+
+

@@ -1,0 +1,294 @@
+---
+title: "R Notebook"
+Author: Xiaoyan Wen
+output: html_notebook
+---
+
+# Import packages
+
+```{r}
+library(stringr)
+library(tidyverse)
+library(maftools)
+library(RTCGAToolbox)
+library(TRONCO)
+```
+# get dataset
+```{r}
+# Valid aliases
+getFirehoseDatasets()
+getFirehoseRunningDates(last = 3)
+getFirehoseAnalyzeDates(last=3)
+```
+
+```{r}
+library(readr)
+paad_maf2 <- read_csv("paad_maf2.csv", col_types = cols(...1 = col_skip()))
+paad_clinic2 <- read_csv("paad_clinic2.csv")
+paad_gistic2 <- read_csv("paad_gistic2.csv", 
+                         col_types = cols(...1 = col_skip()))
+```
+
+
+```{r}
+paad <- read.maf(maf = paad_maf2, clinicalData = paad_clinic2)
+paad
+```
+```{r}
+# plot maf summary
+plotmafSummary(maf = paad, rmOutlier = TRUE, addStat = 'median', dashboard = TRUE, titvRaw = FALSE)
+```
+
+```{r}
+# Drawing oncoplots for top ten mutated genes
+oncoplot(maf = paad, top = 10)
+```
+
+```{r}
+# transversion versus transition
+paad_titv = titv(maf = paad, plot = FALSE, useSyn = TRUE)
+#plot titv summary
+plotTiTv(res = paad_titv)
+```
+
+```{r}
+# Lollipop plots for amino acid changes
+#lollipop plot for TP53, which is one of the most frequent mutated gene in PAAD.
+lollipopPlot(
+  maf = paad,
+  gene = 'TP53',
+  AACol = 'Protein_Change',
+  showMutationRate = TRUE)
+```
+```{r}
+#lollipop plot for KRAS, which is one of the most frequent mutated gene in PAAD.
+lollipopPlot(
+  maf = paad,
+  gene = 'KRAS',
+  AACol = 'Protein_Change',
+  showMutationRate = TRUE)
+```
+
+```{r}
+#lollipop plot for CDKN2A, which is one of the most frequent mutated gene in PAAD.
+lollipopPlot(
+  maf = paad,
+  gene = 'CDKN2A',
+  AACol = 'Protein_Change',
+  showMutationRate = TRUE)
+```
+
+
+
+```{r}
+# rainfall plot to show genomic loci with localized hyper-mutati ons
+rainfallPlot(maf = paad, detectChangePoints = TRUE, pointSize = 0.4)
+```
+
+```{r}
+# plots Variant Allele Frequencies as a boxplot which quickly helps to estimate clonal status of top mutated genes
+plotVaf(maf = paad)
+```
+
+```{r}
+# analysis ====
+# Somatic Interactions
+#exclusive/co-occurance event analysis on top 10 mutated genes. 
+somaticInteractions(maf = paad, top = 25, pvalue = c(0.05, 0.1))
+```
+```{r}
+# Detecting cancer driver genes based on positional clustering
+paad_sig = oncodrive(maf = paad, AACol = 'Protein_Change', minMut = 5, pvalMethod = 'zscore')
+head(paad_sig, 10)
+
+par(mfrow=c(1,2))
+plotOncodrive(res = paad_sig, fdrCutOff = 0.1, useFraction = TRUE, labelSize = 1.2)
+
+paad_pfam = pfamDomains(maf = paad, AACol = 'Protein_Change', top = 10)
+```
+
+```{r}
+#Protein summary (Printing first 7 columns for display convenience)
+paad_pfam$proteinSummary[,1:7, with = FALSE]
+#Domain summary (Printing first 3 columns for display convenience)
+paad_pfam$domainSummary[,1:3, with = FALSE]
+```
+
+```{r}
+# clinical enrichment analysis
+paad_ce = clinicalEnrichment(maf = paad, clinicalFeature = 'pathologic_stage')
+
+
+#Results are returned as a list. Significant associations p-value < 0.05
+paad_ce$groupwise_comparision[p_value < 0.05]
+par(mfrow=c(1,1))
+plotEnrichmentResults(enrich_res = paad_ce, pVal = 0.05, 
+                      geneFontSize = 0.5, annoFontSize = 0.6)
+```
+
+```{r}
+# drug-gene interaction ====
+dgi = drugInteractions(maf = paad, fontSize = 0.75)
+
+## -----------------------------------------------------------------------------
+tp53_dgi = drugInteractions(genes = "TP53", drugs = TRUE)
+#Printing selected columns.
+tp53_dgi[,.(Gene, interaction_types, drug_name, drug_claim_name)]
+```
+```{r}
+kras_dgi = drugInteractions(genes = "KRAS", drugs = TRUE)
+#Printing selected columns.
+kras_dgi[,.(Gene, interaction_types, drug_name, drug_claim_name)]
+```
+```{r}
+cdkn2a_dgi = drugInteractions(genes = "CDKN2A", drugs = TRUE)
+#Printing selected columns.
+cdkn2a_dgi[,.(Gene, interaction_types, drug_name, drug_claim_name)]
+```
+
+
+```{r}
+# oncogene pathways
+OncogenicPathways(maf = paad)
+PlotOncogenicPathways(maf = paad, pathways = "RTK-RAS")
+# Tumor suppressor genes are in red, and oncogenes are in blue font.
+```
+# phylogeny analysis
+```{r}
+paad_maf <- read.csv("paad_maf.csv")
+paad_maf <- paad_maf[,c(-1)]
+paad_dataset_maf = import.MAF(paad_maf,
+                         merge.mutation.types = FALSE)
+view(paad_dataset_maf)
+nevents(paad_dataset_maf)
+ngenes(paad_dataset_maf)
+nsamples(paad_dataset_maf)
+```
+
+```{r}
+# GISTIC
+paad_gistic <- read.delim("PAAD_GISTIC2/all_data_by_genes.txt")
+paad_dataset_gistic = import.GISTIC(paad_gistic)
+view(paad_dataset_gistic)
+```
+
+```{r}
+# clinic
+paad_clinic <- read.csv("paad_clinic.csv")
+paad_clinic <- paad_clinic[,c(-1)]
+
+```
+
+# data process
+```{r}
+# select only the genes mutated at least in the 5% of the patients  
+alterations <- events.selection(as.alterations(paad_dataset_maf), filter.freq = .05)
+paad_clean <- events.selection(paad_dataset_maf,
+                              filter.in.names=c(as.genes(alterations)))
+head(as.genes((alterations)))
+
+# check size after .05 filtering
+nevents(paad_clean)
+ngenes(paad_clean)
+nsamples(paad_clean)
+```
+
+```{r}
+# data consolidation
+paad_consolid <- consolidate.data(paad_clean)
+paad_consolid
+
+# drop un-qualified events
+idis <- paad_consolid$indistinguishable
+undo <- as.data.frame(do.call(rbind, idis))
+do <- as.data.frame(as.genes(paad_clean))
+do <- do[ !(do[,1] %in%(undo$event)), 1]
+head(do)
+
+paad_clean_consolid <- events.selection(paad_clean,filter.in.names = do)
+nevents(paad_clean_consolid)
+ngenes(paad_clean_consolid)
+nsamples(paad_clean_consolid)
+```
+
+# data view after cleaning up 
+```{r}
+oncoprint(paad_clean_consolid)
+```
+
+```{r}
+paad_clean_consolid_subset <- events.selection(paad_clean,
+                                               filter.in.names = c('KRAS','TP53','TTN','SMAD4','CDKN2A','FAT3','MUC16','RYR1','FLG','OBSCN','RBM12','TMCC1','IYD','GNAS','RREB1','CACNA1B' ) )
+
+# check size after subsetting
+nevents(paad_clean_consolid_subset)
+ngenes(paad_clean_consolid_subset)
+nsamples(paad_clean_consolid_subset)
+
+oncoprint(paad_clean_consolid_subset,
+          samples.cluster = TRUE,
+          genes.cluster = TRUE)
+```
+
+# CAPRI
+```{r}
+paad_clean_consolid <- annotate.description(paad_clean_consolid,
+                                  'CAPRI - Bionformatics PAAD data')
+
+paad_model_capri <- tronco.capri(paad_clean_consolid, boot.seed = 1000, nboot = 5)
+
+view(paad_model_capri)
+tronco.plot(paad_model_capri)
+```
+
+```{r}
+paad_clean_consolid_subset <- annotate.description(paad_clean_consolid_subset,
+                                  'CAPRI - Bionformatics PAAD data.subset')
+
+paad_subset_model_capri <- tronco.capri(paad_clean_consolid_subset, boot.seed = 1000, nboot = 5)
+
+view(paad_subset_model_capri)
+tronco.plot(paad_subset_model_capri)
+```
+
+
+# CAPRESE
+```{r}
+paad_clean_consolid <- annotate.description(paad_clean_consolid,
+                                            'CAPRESE - Bionformatics PAAD data')
+paad_model_caprese <- tronco.caprese(paad_clean_consolid)
+view(paad_model_caprese)
+tronco.plot(paad_model_caprese)
+```
+```{r}
+paad_clean_consolid_subset <- annotate.description(paad_clean_consolid_subset,
+                                            'CAPRESE - Bionformatics PAAD data.subset')
+paad_subset_model_caprese <- tronco.caprese(paad_clean_consolid_subset)
+view(paad_subset_model_caprese)
+tronco.plot(paad_subset_model_caprese)
+```
+
+
+```{r}
+conditional.prob = as.conditional.probs(paad_model_capri, models='capri_bic')
+head(conditional.prob$capri_bic, 10)
+```
+```{r}
+as.selective.advantage.relations(paad_model_capri)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

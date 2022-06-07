@@ -1,0 +1,49 @@
+---
+title: "Week14_Assignment"
+author: "Xiaoyan Wen"
+date: "11/21/2020"
+output: word_document
+---
+
+```{r}
+library(readr)
+library(ggplot2)
+library(magrittr)
+library(reshape2)
+```
+
+Q: take two columns from the mRNAseq dataset (Mnemiopsis_count_data.csv)
+plot the cumulative distribution (x axis is value, y axis is number of genes)
+```{r}
+# 1. load the data
+Mnemiopsis_count_data <- read_csv("Mnemiopsis_count_data.csv")
+rownames(Mnemiopsis_count_data) <- Mnemiopsis_count_data$gene
+Mnemiopsis_count_data$gene <- NULL
+Mn_count_data <- as.data.frame(Mnemiopsis_count_data)
+summary(Mn_count_data)
+```
+
+```{r}
+# 2. explore: plotting histogram of all data 
+t <- colnames(Mn_count_data)
+opar <- par(mfrow = c(2, 4), oma = c(0, 0, 1.1, 0))
+for (i in c(1:8)) {
+  hist(Mn_count_data[,i], main = t[i], col = "lightgray");
+}
+mtext("Mnemiopsis count data", side = 3, outer = TRUE)
+par(opar)
+```
+
+```{r}
+# 3. plotting: choose col 1 & 5, subject to cumulative density plot
+cbind(gene = rownames(Mn_count_data), Mn_count_data[,c(1,5)]) %>% melt(id.var = "gene", variable.name = "measures", value.name = "counts") %>% 
+ggplot(aes(counts)) +
+  stat_ecdf(geom = "step") +
+  facet_grid(. ~ measures, scales = "free", labeller = label_both) +
+  labs(title = "Empirical Cumulative Density Function", 
+       subtitle = c("aboral1", "oral1"),
+       y = "Number of genes",
+       x = "Vaule") +
+  theme_classic()
+```
+

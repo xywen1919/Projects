@@ -1,0 +1,219 @@
+---
+title: "mt2"
+author: "Xiaoyan Wen"
+date: "10/24/2020"
+output: word_document
+---
+
+```{r}
+library(dplyr)
+library(tibble)
+library(tidyr)
+library(Hmisc)
+```
+
+#Data set 2: a) Mnemiopsis_col_data.csv b) Mnemiopsis_count_data.csv
+```{r}
+# read the data
+m_count <- read.csv("Mnemiopsis_count_data.csv", header = T, stringsAsFactors=FALSE, row.names = 1)
+str(m_count); head(m_count)
+```
+
+# 1) What are the top 5 genes with the highest average expression (across experiments) in the set ?
+```{r}
+# add one column as row_mean
+m_count_sta <- mutate(m_count, row_mean = as.numeric(rowMeans(m_count)))  
+# add row name
+row.names(m_count_sta) <- row.names(m_count)
+# select top 5 rows based on row mean value
+m_count_topmean <- slice_max(m_count_sta, order_by = row_mean, n = 5)
+# find out the row name for the top5
+m_count_topmean_gene <- row.names(m_count_topmean)
+m_count_topmean_gene
+```
+
+#2) Are the top 5 genes different if they are done on a per column basis ?
+
+```{r}
+m_count_c_topmean <- c()
+for (i in c(1:8)){
+  top5r <- slice_max(m_count_sta, order_by = m_count_sta[,i], n = 5)
+  top5gene <- row.names(top5r)
+  m_count_c_topmean <- rbind(m_count_c_topmean, top5gene)
+}
+
+m_count_c_topmean
+```
+# 3-1) Calculate mean and standard deviation of each column
+```{r}
+head(m_count_sta); str(m_count_sta); dim(m_count_sta)  # check the data
+
+col_mean <- colMeans(m_count_sta)             # calculate column mean
+
+col_sd <- c()                                # calculate column sd
+for (i in c(1:ncol(m_count_sta))){
+  csd <- sd(m_count_sta[,i])
+  col_sd <- append(col_sd, csd)
+}
+col_sd
+
+# combine the mean and variance into a new data frame "col_sta"
+col_sta <- as.data.frame(rbind( mean = col_mean, sd = col_sd))  
+colnames(col_sta) <- colnames(m_count_sta)     # add column name to the table
+col_sta
+```
+
+# If the mean is different, then scale the columns so that they all have the same mean for the subsequent questions
+
+```{r}
+# calculate the scale_factor to make all the column means equal to row_mean
+multiplier <- col_sta$row_mean[1]/col_sta[1,]
+
+m_count_sta_b <- m_count_sta   # set a new data set copied from the original one
+for (i in c(1: 9)){                    # loop to x multiplier for each column
+  m_count_sta_b[,i] <- m_count_sta[,i]*multiplier[,i]
+}
+
+m_count_b <- m_count_sta_b[,c(1:8)]
+summary(m_count_b)          # summary the new data set
+```
+
+# 3-2) Use correlations between columns to find the samples that are closely related. 
+```{r}
+result <- rcorr(as.matrix(m_count_b), type = "pearson") # find out correlations
+c_r <- result$r                                   # check correlation r 
+
+# select maximum value from the c_r upper triangle (not include diagonal)
+top_c_r <- tail(sort(c_r[upper.tri(c_r)]), 1)
+
+c_r <- as.matrix(c_r)
+top_c_r_ind <- which(c_r == top_c_r, arr.ind = T) # find the corresponding index in the c_r
+top_c_r_ind
+```
+# 4) Use correlations between rows to find the closest pairs (top 5)
+```{r}
+
+```
+
+
+# 5) If you were forced to divide the genes in each column into high, medium and low count genes, how would you do this based on the data that you have ?
+```{r}
+par(mfrow = c(2,4))                   # plot histogram for each column
+for (i in c(1:8)){
+  hist(m_count_b[,i])
+}
+```
+
+```{r}
+x <- cut(m_count_b[,1], 3, include.lowest=TRUE, labels=c("Low", "Med", "High"))
+table(x)                      # cutting according to raw_value is not working
+```
+```{r}
+# before transfer the data to log format, drop rows having zeros
+m_count_b2 <- m_count_b            
+for (i in c(1:8)){
+  m_count_b2 <- filter(m_count_b2, m_count_b2[,i] > 0)
+}
+
+dim(m_count_b2); summary(m_count_b2)
+```
+
+```{r}
+# distribution of a log transformed dataset
+m_count_b2_log <- log(m_count_b2)
+par(mfrow = c(2,4))
+for (i in c(1:8)){
+  hist(m_count_b2_log[,i])
+}
+summary(m_count_b2_log)
+```
+
+```{r}
+# cutting according to log_value and plot boxplot
+
+par(mfrow = c(2,4))
+x_tb <- c()
+
+for (i in c(1:8)){
+  x2 <- cut(m_count_b2_log[,i], 3, include.lowest=TRUE, labels=c("Low", "Med", "High"))
+  x_tb <- rbind(x_tb,table(x2))
+  boxplot(m_count_b2_log[,i] ~ x2)
+}
+
+x_tb
+
+# would normalized the column mean, dropping the genes with zero, log the data and then group to "high", "medium" and "low".
+```
+
+# 6) make a list of the top 5 genes with most variability and top 5 genes with least variability (exclude genes that have low expression values)
+```{r}
+# calculate row_mean, row_sd and add as columns to the no_zero dataset "m_count_b2"
+m_count_b2[,c(9:12)] <- NULL
+m_count_b2 <- cbind(m_count_b2, row_mean = apply(m_count_b2, 1, mean), row_sd = apply(m_count_b2, 1, sd))
+dim(m_count_b2); summary(m_count_b2)
+
+
+top5_varia <- slice_max(m_count_b2, order_by = "row_sd", n = 5)
+top5_varia[ , c(9:10)]
+
+bot5_varia <- slice_min(m_count_b2, order_by = m_count_b2$row_sd, n = 5)
+bot5_varia[ , c(9:10)]
+```
+
+# 7) Using the labels of columns provided, find the top variable genes between the two groups using a t-test
+# list the 5 most up regulated and 5 most downregulated genes.
+```{r}
+# perform t test between the two group for each row, add columns for mean_ratio, p_value, FDR_value
+
+# loop to perform t.test and extract p.value, estimate for each row;
+t_esti <- c()
+t_pval <- c()
+ad_pval <- c()
+for (i in c(1:dim(m_count_b2)[1])){
+  t <- t.test(m_count_b2[i,c(1:4)], m_count_b2[i,c(5:8)])
+  fdr <- p.adjust(t$p.value, method = "BH")
+  t_esti <- rbind(t_esti, t$estimate)
+  t_pval <- rbind(t_pval, t$p.value)
+  ad_pval <- rbind(ad_pval, fdr)
+}
+m_count_b2[,c(11:13)] <- NULL 
+m_count_b2 <- cbind(m_count_b2, mean_ratio = t_esti[,2]/t_esti[,1], t_pvalue = t_pval, FDR = ad_pval)
+dim(m_count_b2); summary(m_count_b2)
+```
+
+```{r}
+# select the top variable genes using criteria of FDR < 1%
+
+topvar_from_t <- filter(m_count_b2, FDR < 0.01)
+nrow(topvar_from_t)
+
+# list the top5 up- and down- regulated genes 
+top5_up <- slice_max(topvar_from_t, order_by = mean_ratio, n = 5)
+top5_up
+top5_down <- slice_min(topvar_from_t, order_by = mean_ratio, n = 5)
+top5_down
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

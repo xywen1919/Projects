@@ -1,0 +1,391 @@
+---
+title: "wk10"
+author: "XiaoyanWen"
+date: "4/6/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+### Next Generation Sequence Analysis Homework Week 10
+
+This week you will use a "pseudo-alignment" based method to conduct differential gene expression (DGE) analysis with the **Salmon + tximport + DESeq2** workflow.
+
+Pseudo-alignment is a recent development in RNA-seq analysis that allows quantification of transcript abundances without the need to align reads and create SAM/BAM alignment files.
+
+\*Salmon is one of a number of pseudo-alignment software that uses kmers to identify which transcript a read originates from without determining the exact mapping location of the read.
+
+\*Salmon returns transcript quantification estimates as Transcripts Per Million (=TPMs) which can be converted to gene-level counts for DGE (or can be used for transcript-level tests of differential transcript expression with other tools).
+
+Why conduct DGE with this workflow as opposed to exon union approaches such as **STAR + htseq-count + DESeq2**? Statisticians have reported that exon union approaches to gene-level analysis can have an inflated false positive rates because of differential transcript usage (DTU).
+
+DTU is when treatment and control have different mixtures of alternative splice variants. The altered mix of transcripts impact exon union count-based approaches and can cause false positive (false inferences of DGE) because alternative splice variants have different lengths. DTU therefore increases the false positive rate because length variation among alternative splice variants is not accounted for in the **STAR + htseq-count + DESeq2** and related workflows (see Week 8 and 9).
+
+To avoid this, statisticians have suggested conducting gene-level analysis by first calculating Transcripts per Million (TPMs) for each alternative splice variant followed by conversion of TPMs to count data at the gene level. This approach is implemented in the Bioconductor **tximport package** and described in Soneson et al. 2016 (see Week 10 materials). In fact, recent versions of DESeq2 recommend the Salmon + tximport + DESeq2 workflow for DGE analysis. This is the workflow you will implement below.
+
+#### About the data
+
+In this exercise, you will again use the date palm fruit RNA-seq dataset introduced in Weeks 7 and 8. You will test for differential gene expression between types ("varieties") of date palm with high fruit sucrose content (n=4) versus those with trace (very low) amounts of sucrose (n=4).
+
+The goal of the original research was to determine if a group of linked invertase genes identified by Genome Wide Association Study (GWAS) showed DGE between varieties with the two sugar phenotypes and might therefore cause the sugar composition phenotype.The RNA-seq data in this experiment were generated on a NextSeq sequencer, processed to exclude reads that failed Illumina's quality control filter, and then adapters removed with Trimmomatic.
+
+#### Getting Started with Salmon
+
+In this exercise, you will use Salmon to estimate transcript abundances (i.e., TPMs), convert TPMs to gene-level counts, and conduct differential expression analysis with DESeq2.
+
+Salmon uses pseudo-alignment to estimate TPM for each annotated (i.e., in the GFF/GTF annotation) alternative splice variant ("transcript") of a gene. The approach works on the principle that the transcript a sequencing read originates from can be determined with high confidence, without the need to determine the exact position where the read optimally maps to. This is much faster and avoids generation of large intermediate SAM/BAM files.
+
+Salmon can estimate TPM in either mapping-based mode or alignment-based mode, the latter of which uses pre-computed alignments in SAM/BAM format. Please read more about this at the Salmon website here:
+
+<https://salmon.readthedocs.io/en/latest/salmon.html#using-salmon>
+
+#### Task 1: Run Salmon
+
+In this task, you will run Salmon on Prince in mapping mode on the date palm paired-end fastq data from Week 8.
+
+Salmon is different in a number of respects from reference-based tools used in this course. Instead of using a reference genome, Salmon requires reference transcripts. That is, the reference to which reads will be "pseudo-aligned" is a transcriptome fasta. This file contains transcript sequences specified in a genome annotation (GFF or GTF file). An alternative approach would be to de novo assemble the transcriptome from RNA-seq reads and use the de novo sequences as inputs.
+
+Log in to Greene, request a compute node, and create directories as follows:
+
+```{bash eval=FALSE}
+srun --time=4:00:00 --mem=4GB --pty /bin/bash
+cd $SCRATCH
+mkdir ngs.week10
+cd ngs.week10
+```
+
+Before running Salmon, it is necessary to create index files for the reference transcriptome. One of the assumptions of Salmon is that observations (i.e. alignments) are made "at random" (see note on "read alignment / order at the above Salmon manual page referenced above). This requires that transcripts in the reference transcript fasta are randomly ordered.
+
+Your instructor followed the recommendation to shuffle the transcript order in the transcript fasta using the **bbmap package shuffle.sh script**. After shuffling the fasta, your instructor ran the following to create a directory with Salmon index files.
+
+```{bash eval=FALSE}
+salmon index -t Pdac_Barhee_chr_unan_180126.all.maker.transcripts_HC_shuffled_normalized.fa \
+-i Pdac_Barhee_chr_unan_180126.all.maker.transcripts_HC_shuffled_normalized_index \
+-k 31
+```
+
+This produced the following index directory:
+
+`/scratch/work/courses/BI7653/hw10.2022/datepalm_transcripts/Pdac_Barhee_chr_unan_180126.all.maker.transcripts_HC_shuffled_normalized_index`
+
+note: Salmon index command requires a kmer length. If you want to re-run Salmon with a different kmer-length then you need to create a new index specifying a different length.
+
+You will now run an array job to execute Salmon on date palm paired-end fastqs from Week 8. The sample table with fastqs is here:
+
+`/scratch/work/courses/BI7653/hw8.2022/fastqs.txt`
+
+Your instructor has written a script for you based on recommendations at the Salmon website (see the "Quantifying in mapping-based mode" section) and also recommendations made in the DESeq2 vignette:
+
+<https://www.bioconductor.org/packages/devel/bioc/vignettes/DESeq2/inst/doc/DESeq2.html>
+
+Notes on running Salmon:
+
+-   The --validateMappings option forces Salmon to run "selective alignment" which is recommended for all Salmon analysis
+
+-   The -l A option automatically determines library type (unpaired or paired, "innie" or "outie" read configuration
+
+-   DESeq2 recommends always running Salmon with --gcBias option
+
+-   Salmon requires the path to the directory with Salmon index files.
+
+Now copy the following text into a slurm script in your ngs.week10 directory. Modify the #SBATCH directive --mail-user to specify your email and execute using sbatch. The script will create a sample directory for each sample to which all outputs will be written.
+
+```{bash eval=FALSE}
+#!/bin/bash
+#
+#SBATCH --nodes=1
+ #SBATCH --tasks-per-node=1
+#SBATCH --cpus-per-task=4
+#SBATCH --time=24:00:00
+#SBATCH --mem=8GB
+#SBATCH --job-name=salmon
+#SBATCH --mail-type=FAIL
+#SBATCH --mail-user=<your email>
+#SBATCH --array=1-8
+
+module purge
+
+module load salmon/1.4.0
+
+echo The array index is: ${SLURM_ARRAY_TASK_ID}
+
+table=/scratch/work/courses/BI7653/hw8.2022/fastqs.txt
+line="$(head -n ${SLURM_ARRAY_TASK_ID} "${table}" | tail -n 1)"
+sample="$(printf "%s" "${line}" | cut -f1)"
+fq1="$(printf "%s" "${line}" | cut -f2)"
+fq2="$(printf "%s" "${line}" | cut -f3)"
+
+fqdir=/scratch/work/courses/BI7653/hw8.2022/fastqs
+salmon_index_dir=/scratch/work/courses/BI7653/hw10.2022/datepalm_transcripts/Pdac_Barhee_chr_unan_180126.all.maker.transcripts_HC_shuffled_normalized_index
+
+mkdir "${sample}"
+cd "${sample}"
+
+salmon quant -i ${salmon_index_dir} -l A -1 $fqdir/$fq1 -2 $fqdir/$fq2 --validateMappings --gcBias --threads ${SLURM_CPUS_PER_TASK} -o $sample.transcripts_quant
+
+echo _ESTATUS_ [ salmon quant $sample ]: $?
+echo _END_ [ salmon slurm ]: $(date)
+
+```
+
+Q1.1. A key consideration when conducting any type of RNA-seq analysis is the percentage of reads that aligned. The Salmon approach may have a low mapping rate if the kmer length is too stringent (kmer matches between read and transcript are too long).
+
+Review the logging output of Salmon. Report the mapping rates for each sample produced by Salmon. Do you consider these to be too low? If so, how might you re-run Salmon to increase the mapping rates (see Salmon website above)? \[ 1 point \]
+
+[**Answer**]{.ul}:
+PDAC253   Mapping rate = 8.71844%
+PDAC266   Mapping rate = 11.1517%
+PDAC273   Mapping rate = 22.8452%
+PDAC282   Mapping rate = 15.9158%
+
+PDAC286   Mapping rate = 11.8775%
+PDAC306   Mapping rate = 8.93615%
+PDAC316   Mapping rate = 17.2182%
+PDAC318   Mapping rate = 12.1166%
+
+Yes, the mapping rates are too low. If seeing a low mapping rate than expected, consider building the index with a slightly smaller k.
+
+Q1.2. Choose a sample and review the output file "quant.sf". What are the columns in the output? Please provide an explanation of each column (see "Salmon Output File Formats" in "Output" section of documentation page referenced above).
+
+[**Answer**]{.ul}: The columns are Name, Length, EffectiveLength, TPM, NumReads.
+![](quant_sf.png)
+
+- Name: the target transcript provided in the input FASTA file.
+
+- Length: the length of the target transcript in nucleotides.
+
+- EffectiveLength: the computed *effective* length of the target transcript. It takes into account all factors being modeled that will effect the probability of sampling fragments from this transcript, including the fragment length distribution and sequence-specific and gc-fragment bias.
+
+- TPM: salmon's estimate of the relative abundance of this transcript in units of Transcripts Per Million (TPM)
+
+- NumReads: salmon's estimate of the number of reads mapping to each transcript that was quantified.
+
+Q1.3. As discussed in detail in pre-recorded videos, RNA-seq libraries can be stranded or unstranded. Read the following before attempting to answer the questions below:
+
+"What's this LIBTYPE" section of the Salmon documentation: <https://salmon.readthedocs.io/en/latest/salmon.html#what-s-this-libtype>
+
+Then read: <https://salmon.readthedocs.io/en/latest/library_type.html#fraglibtype> <https://salmon.readthedocs.io/en/latest/file_formats.html#fileformats> <https://groups.google.com/forum/#!topic/sailfish-users/P-1V473mHd8>
+
+Review the lib_format_counts.json output and answer the following questions. \[ 2 points \].
+
+Q1.3a. What library type did Salmon infer for the input reads?
+
+Recall that "inward" ("innie") and refers to whether paired-end reads are on opposite strands and "point" toward each other (i.e., the coordinates of the 3' ends of a mapped read pair are closer to each other) and "outward" ("outie") refers to whether the reads are on opposite strands but "point" away from each other (i.e., the coordinates of the 5' ends of a mapped reead pair are closer to each other). "Matching" refers to a library type where both reads in a read pair, by design, are on same strand.
+![](libFormat.png)
+
+1.  IU ("inward", "unstranded")
+
+2.  IS ("inward", "stranded")
+
+3.  OU ("outward","unstranded")
+
+4.  OS ("outward","stranded")
+
+5.  all of the above
+
+[**Answer**]{.ul}: 1 - IU
+
+Q1.3b What library type do you think Salmon would have inferred if the date palm RNA-seq had been a stranded library preparation? Please use the two-letter syntax reported in the Salmon documentation.
+
+1.  IS ("inward", "stranded")
+
+2.  IU ("inward", "unstranded")
+
+3.  OU ("outward","unstranded")
+
+4.  OS ("outward","stranded")
+
+5.  all of the above
+
+[**Answer**]{.ul}: 1. IS
+
+Q1.3c Explain in your own words what is the difference between a stranded (="strand-specific") and unstranded library?
+
+[**Answer**]{.ul}: the stranded library retains the directionality information of the reads, so that people can tell the orientation of the original transcript; whereas in unstranded library, the orientation of the original transcript is ambiguous.  
+
+Q1.3d Which do you think is typically preferred for performing DGE analysis, stranded or unstranded libraries? Why?
+
+[**Answer**]{.ul}: the stranded library is typically preferred for DGE analysis because it could provide a more accurate quantification of gene expression levels.
+
+#### Task 2: Run tximport to create a DESeq2DataSet
+
+tximport is a Bioconductor package that imports transcript-level abundance estimates (TPMs) and transcript length estimates and returns gene-level counts that are required by DESeq2. Here you will use tximport to import the Salmon output into DESeq2.
+
+Please read the section "Transcript abundance files and tximport / tximeta" here:
+
+<https://www.bioconductor.org/packages/devel/bioc/vignettes/DESeq2/inst/doc/DESeq2.html>
+
+Your instructor recommends working interactively on your personal computer (e.g., in RStudio). If you do so, you must do following after Salmon has completed:
+
+1.  Install tximport from Bioconductor: <https://bioconductor.org/packages/release/bioc/html/tximport.html>
+
+2.  Download your ngs.week10 directory and all its contents from Task 1
+
+3.  Download the "tx2gene" mapping file and save in your ngs.week10 directory. The tx2gene file is here:
+
+`/scratch/work/courses/BI7653/hw10.2022/datepalm_transcripts/Pdac_Barhee_chr_unan_180126_maker_HC.tx2gene`
+
+note: the "tx2gene" mapping file is a two-column comma-delimited file with transcript id in column 1 and its parent gene id in column 2. This file is required by tximport to convert TPMs to gene counts. Your instructor created this file by parsing the genome annotation GFF (Pdac_Barhee_chr_unan_180126_maker_HC.gff) using \*\* create_tx2gene.pl \*\* which is located in `/scratch/work/courses/BI7653/hw10.2022/datepalm_transcripts`.
+
+Open RStudio and set your working directory to the location of your ngs.week10 directory.
+
+Then Execute the following code block to import the "quant.sf" files for each sample into DESeq2 as a DESeqDataSet object.
+
+```{r}
+library(tximport)
+sample_names <- c('PDAC253','PDAC282','PDAC286','PDAC316','PDAC266','PDAC273','PDAC306','PDAC318')
+sample_condition <- c(rep('highSucrose',4),rep('lowSucrose',4))
+
+files <- file.path("ngs.week10",sample_names,paste(sample_names,".transcripts_quant",sep=""),'quant.sf')
+names(files) <- sample_names
+
+tx2gene <- read.table("Pdac_Barhee_chr_unan_180126_maker_HC.tx2gene",header=F,sep=",")
+
+txi <- tximport(files, type="salmon", tx2gene=tx2gene)
+
+samples <- data.frame(sample_names=sample_names,condition=sample_condition)
+row.names(samples) <- sample_names
+```
+
+#You may now build the DESeqDataSet object as follows:
+
+```{r}
+# create DESeqDataSet object
+library("DESeq2")
+ddsTxi <- DESeqDataSetFromTximport(txi,
+                                   colData = samples,
+                                   design = ~ condition)
+class(ddsTxi)
+
+```
+```{r}
+ddsTxi
+```
+
+Q2.1. A nice property of TPMs is that TPMs for alternative transcripts can be added to get the TPM value for all transcripts in a gene. Why does DESeq2 need to convert TPMs to gene counts instead of just using the gene-level TPMs directly in the statistical analysis \[ 1 point \]?
+
+[**Answer**]{.ul}: Gene-level summarizes counts over genes, and transcrpt-level summarizes counts over transcripts. After adding up the transcript sum for each gene, normalization is needed to convert raw read counts into informative measures of gene expression accounting for factors that affect the number of reads mapped to a gene, like length, GC-content and sequencing depth.
+
+#### Task 3: Run DESeq2
+
+DESeq2 can now be run on the DESeqDataSet object as introduced in Week 9 assignment and the screencast video available in the Week 8 materials.
+
+When running the analysis, remove genes with fewer than 10 reads and use "lfcShrink" in favor of the "results" function when creating the DESeqResults object. Take care in defining the "contrast" argument to lfcShrink (see Week 9 Assignment). The output should be a set of results ordered based on the adjusted p-value.
+
+Q3.1. Please report the commands you executed to complete your analysis \[ 1 point \].
+
+```{r}
+# remove gene with fewer than 10 counts
+keep <- rowSums(counts(ddsTxi)) >= 10
+ddsTxi <- ddsTxi[keep,]
+# Execute the DESeq wrapper function
+ddsTxi <- DESeq(ddsTxi)
+ddsTxi
+
+# DESeqReslut
+res <- lfcShrink(ddsTxi,contrast = c('condition','lowSucrose','highSucrose'),type = "ashr")
+res <- res[order(res$padj),]
+```
+
+Q3.2. In Week 9 you considered the problem of multiple comparisons and application of FDR. Now Lets take a more careful look at the uncorrected p-value distribution which can alert us to potential problems in the statistical analysis.
+
+A histogram is a way of visualizing the density distribution of a vector of numeric values (such as p-values) that are binned typically in evenly spaced intervals.
+
+Construct a histogram of the raw (uncorrected) p-values from the DESeqResults object. Note, you may need to change the "res" variable in the command below based on the value you assigned to the output of the lfcshrink function ("res" variable is a DESeqResults object).
+```{r}
+library(ggplot2)
+ggplot(as.data.frame(res),aes(pvalue)) + geom_histogram(fill="light blue",color='black')
+
+```
+There are a few possible shapes of the histogram.
+
+1.  a uniform distribution (no large "peaks" or "valleys" in the distribution) suggests that very few, if any, genes are differentialy expressed in the analysis
+
+2.  depletion of values with low p-values. This could suggest a confounding factor such as a batch effect.
+
+3.  a multi-modal distribution (multiple humps) could indicate a strong correlation structure in the data and may suggest that the statistical methods applied are inappropriate
+
+4.  a choppy appearance (some p-values observed, others not observed) could mean the P-values are fall into discrete classes (undesirable)
+
+5.  an enrichment of low p-values. This is the expected result if there is a large class of differentially expressed genes between treatment and control.
+
+Which pattern (a-e) do you observe in your histogram? What does this suggest about the impact of sugar composition on gene expression? Please include your p-value histogram in your answer. \[ 1 point \].
+[**Answer**]{.ul}:  I see 5 - an enrichment of low p-values.
+
+
+Q3.3. Report the results table for the top 10 differentially expressed genes according to adjusted p-value (i.e., FDR). Then, for each of the three genes below Do you consider the gene(s) to be differentially expressed, both statistically and biologically in terms of log fold-change? Why or why not \[ 1 point \].
+```{r}
+# top 10 differentially expressed genes according to adjusted p-value 
+head(res,10)
+```
+
+Pdac_HC_chr14G0022900 (cell wall invertase enzyme)
+
+Pdac_HC_chr14G0023100 (cell wall invertase enzyme)
+
+Pdac_HC_chr14G0028200 (alkaline/neutral invertase enzyme)
+
+```{r}
+res[row.names(res) %in% c('Pdac_HC_chr14G0022900','Pdac_HC_chr14G0023100','Pdac_HC_chr14G0028200'),]
+```
+[**Answer**]{.ul}: for 3 genes, Pdac_HC_chr14G0022900 and Pdac_HC_chr14G0023100 are considered to be differentially expressed both both statistically and biologically; whereas Pdac_HC_chr14G0028200 is not significantly differentiated comparing lowSucrose vs highSucrose. Because the non-significant one's adjusted p value > 0.05 threshold and log2FoldChange < 1 threshold.
+
+
+Q3.4. The dispersion parameter in the negative binomial model is one of the key parameters that must be estimated by statistical packages of DGE based on count data. DESeq2 will typically shrink the initial dispersion values by fitting a model (i.e., the fitted line) and then shrinking the dispersion values towards the fitted line (see pre-recorded video).
+
+By default, dispersions are estimated using the estimateDipsersions function (which is executed by the DESeq2 wrapper function), using a parametric method (?estimateDispersions, fitType). However, if this parametric method does not provide a good fit to the dispersion-mean relationship then an alternative fit should be adopted.
+
+An important diagnostic in DESeq2 is to evaluate the relationship of gene-wise dispersion to mean of normalized counts using plotDispEsts function (?plotDispEsts) on the DESeqDataSet object. In this plot, black values are the original genewise dispersion values and blue are the adjusted values based on the model fit (red line)
+
+Now generate three dispersion-mean plots for all three methods ('parametric','local' and 'mean') and compare. Is there a difference? (see ?estimateDispersions "fitType" argument). In order to do so, you need to call the estimateDisersions + plotDispEsts functions 3 times (each time will update dds object with new dispersion estimates for the indicated method)
+
+Show your code and plots.
+```{r}
+dds <- DESeqDataSetFromTximport(txi,
+                                colData = samples,
+                                design = ~ condition)
+keep <- rowSums(counts(dds)) >= 10
+dds <- dds[keep,]
+
+dds_parametric <- estimateSizeFactors(dds)
+dds_parametric <- estimateDispersions(dds_parametric, fitType="parametric")
+plotDispEsts(dds_parametric)
+```
+
+```{r}
+dds_local <- estimateSizeFactors(dds)
+dds_local <- estimateDispersions(dds_local, fitType="local")
+plotDispEsts(dds_local)
+```
+
+```{r}
+dds_mean <- estimateSizeFactors(dds)
+dds_mean <- estimateDispersions(dds_mean, fitType="mean")
+plotDispEsts(dds_mean)
+```
+
+Then, read the DESeq2 vignettesection "Dispersion plot and fitting alternatives". Then read this post and the answer by Michael Love, the lead developer of DESeq2:
+
+<https://support.bioconductor.org/p/63244/>
+
+What is the relationship of genewise dispersions and the mean of normalized counts in each of your plots? Do you see a difference among the three methods? Should the fitType be changed from the default "parametric" method as run by the DESeq wrapper function? \[ 1 point \]
+[**Answer**]{.ul}:
+- using "fitType=parametric"to make sure that the final estimates shrunk from the gene-wise estimates towards the fitted estimates;
+
+- in the case that the parametric curve doesn’t fit the observed dispersion mean relationship, use "fitType=local";
+
+- The "fitType=mean" option is useful when there is no apparent dependence of dispersion estimates over mean.
+
+* yes, I see difference of the "mean" method from the other two. and I don't think the default "parametric" method should be changed.
+
+
+Q3.5. In Week 8 and 9, you ran DGE analysis with an exon union approach, while this week you ran DGE using a Salmon + tximport + DESeq2 workflow. What are three reasons why the Salmon + tximport + DESeq2 workflow may be preferred over the STAR + htseq-count + DESeq2 workflow? \[ 1 point \]
+[**Answer**]{.ul}:Salmon + tximport + DESeq2 workflow analyze gene-level differential expression by transcript quantification and count conversion. This workflow is preferred over the traditional STAR + htseq-count + DESeq2 workflow quantify gene-level abundance because 
+1. it doesn't assume equal isoform lengths among sample conditions; 
+2. avoid the inflation errors introduced by gene-level count-based approaches;
+3. avoid high FDR in real data.
+
+
+#### You are finished, upload the answers in a test, word, or pdf with naming convention \_homework_week10.txt,.docx, or .pdf at the link provided for Week 10 in the "Assignments" section on the NYU Classes webpage.

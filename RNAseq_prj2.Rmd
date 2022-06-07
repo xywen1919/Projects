@@ -1,0 +1,127 @@
+---
+title: "HomeWork2"
+author: "XiaoyanWen"
+date: "6/18/2021"
+output:
+  html_document: default
+  word_document: default
+---
+
+Part 1: Answer the following questions. (10pts)
+
+1. What do we mean by the “distribution” of the data? 
+
+Answer: “Distribution” of the data means all possible values of the data. The distribution of a data set is the shape of the graph when all possible values are plotted on a frequency graph.
+
+2. Why is it important to know the variance and standard error of a statistic for sample data? How do we calculate these values in R?
+
+Answer: The variance and standard error are used to estimate how well the sample data represent the true population. 
+To calculate in R, 
+- Sample variance is computed with the var() function;
+- The standard error can be obtained by dividing the standard deviation (get from sd() function) by the square root of the length of the data.
+
+3. What are the differences between the varieties of two-sample t-tests, and how can we which to use and how do we tell R how to apply the correct test using t-test()?
+
+Answer: To compare the mean differences between two samples using t-test, variances of the two samples have to be tested to decide whether two datasets are similar enough to be considered as equalvariance or unequalvariance. Two-sample variance difference can be tested by the ratio of variances that follows F distribution. To calculate variance difference in R, we can use var.test() function. Once variance difference is decided, in t.test() function, var.equal can be used as a True/False argument:
+- for equalvariance: t.test(x, y, var.equal = TRUE)
+- for unequalvariance: t.test(x, y, var.equal = FALSE)
+
+4. What is the R function for a nonparametric equivalent to a two-sample t-test?
+
+Answer: R function wilcox.test() can be used to compare group differences based on ranking values.
+
+5. What statistical is more appropriate when you want to identify interactions between multiple factors?
+
+Answer: Hypergeometric test could be used to determine interactions between multiple factors. specifically, fisher’s exact test is strict and could be used in the cases where values in the table are less than 10; chi-square test is more appropriate for other cases.
+
+Part 2: Download “expvalues.txt” from homework 1 and load it into your R workspace. (25pts)
+
+```{r}
+expvalues <- read.csv("C:/Users/wen_x/Downloads/trantomicsData/hw2/expvalues.txt", sep="")
+dim(expvalues)
+head(expvalues)
+```
+
+1. Write a function getlogFC that calculates the log of the ratio
+(treatment/control) for a gene. The inputs of your function should be:
+a. a vector of expression values ( a row from expvalues dataframe)
+b. the expgroups factor.
+Your functions should return a numerical value that is either negative or
+positive. You should be able to apply your function to the whole expvalues
+dataframe to get all log fold change values.
+```{r}
+# function for log(gene) groupmean-ratio
+getlogFC <- function(x, expgroups){
+  logfc <- diff(tapply(log2(x), relevel(expgroups, ref = "control"), mean))
+  return(logfc)
+}
+
+# apply to the expvalues dataframe
+expgroups <- factor(rep(c("control", "treatment"), each=3)) # group factor
+exp_logFC <- apply(expvalues, 1, getlogFC, expgroups)  # apply fx to each row of the dataframe
+head(exp_logFC)
+```
+
+2. Write a function getTtestPvalue that performs a two-sample t-test comparing the
+control values to the treatment values for a given gene. (Assume the samples are
+not paired and the variance is same). The inputs of this function are the same as
+before and the result should be a numerical value between 0 and 1. Apply this
+function to the expvalues dataframe as well to get all pvalues.
+```{r}
+# function for p-value from t-test 
+getTtestPvalue <- function(x, exproups){
+  pval <- t.test(x ~ exproups, var.equal = TRUE)$p.value
+  return(pval)
+}
+
+# apply to the expvalues dataframe
+exp_pval <- apply(expvalues, 1, getTtestPvalue, expgroups) # apply fx to each row of the dataframe
+head(exp_pval) 
+  
+```
+3. Gene regulation:
+a. How many genes have a p-value < 0.05?
+b. How many genes have log ratio greater than 1 or less than -1?
+c. How many genes satisfy both criteria (a and b) above?
+```{r}
+# number of genes with p-value < 0.05
+sum(exp_pval < 0.05)
+
+# number of genes with log ratio greater than 1 or less than -1
+sum(abs(exp_logFC) > 1)
+
+# number of genes that satisfy both criteria
+diffgenes <- names(which(exp_pval < 0.05 & abs(exp_logFC) > 1))
+length(diffgenes)
+
+```
+
+4. Create a scatter plot where log ratio values are on the x-axis and p-value is on the
+y-axis. To help with the visualization of the graph, take –log base 10 of the p-values
+before you plot them.
+a. Draw a red horizontal line where p-value is 0.05 and two blue vertical lines
+at x = -1 and x=1.
+```{r}
+plot(x = exp_logFC, y = -log10(exp_pval), pch = "+", ylim = range(-0.1:4.5), col = rgb(.4,0,1,.25), main = "volcano plot for -log(pval) versus log(expression)fold changes") 
+abline(h = -log10(0.05), col = "red")
+abline(v = -1, col = "blue")
+abline(v = 1, col = "blue")
+```
+
+5. Calculate the adjusted p-values using the "BH" method in the p.adjust() function.
+a. How many genes have a an adjusted p-value < 0.05?
+```{r}
+# function for t-test p-value
+exp_pval_adj <- p.adjust(exp_pval, method = "BH")
+ 
+# number of genes with BH-adjusted p-value < 0.05
+sum(exp_pval_adj < 0.05)
+```
+b. Draw another volcano plot but this time use the adjusted p-values instead
+of the original t-test p-values.
+```{r}
+plot(x = exp_logFC, y = -log10(exp_pval_adj), pch = "+", ylim = range(-0.1:4.5), main = "volcano plot for -log(BH-adjusted pval) versus log(expression)fold changes") 
+abline(h = -log10(0.05), col = "red")
+abline(v = -1, col = "blue")
+abline(v = 1, col = "blue")
+```

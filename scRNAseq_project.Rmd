@@ -1,0 +1,150 @@
+---
+title: "SingelCellRNAseq_Homework"
+author: "XiaoyanWen"
+date: "8/11/2021"
+output: html_document
+---
+
+Single Cell RNA-seq Workflow using Seurat
+For this assignment we will analyze a publicly available scRNA-seq dataset using Seurat, a popular R package for analyzing scRNA-seq. There are several different workflows included in the package, but for now we will focus on clustering the cells based on gene expression. We will follow the worflow provided here Seurat - Guided Clustering Tutorial
+
+There are two main goals of this assignment:
+
+How many different cell types do we have in our dataset?
+Which genes are useful in identifying one cell type from another.
+The dataset we will be using is from a dataset looking at pancreatic ductal adenocarcinoma GSE111672. The study looks at two different samples, however for this assignment, we will only focus on one.
+
+Moncada R, Barkley D, Wagner F, Chiodin M et al. Integrating microarray-based spatial transcriptomics and single-cell RNA-seq reveals tissue architecture in pancreatic ductal adenocarcinomas. Nat Biotechnol 2020 Mar;38(3):333-342. PMID: 31932730
+Loading the data
+Step 0: Please install and load the following packages
+
+```{r}
+library(dplyr)
+library(Seurat)
+library(patchwork)
+```
+
+Step 1: Load the TSV file
+```{r}
+GSM3036909 <- read.delim("GSM3036909.tsv")
+```
+
+Step 2: Create a Seurat object.
+Call the object pdac1. You set the project argument in the CreateSeuratObject the same. Here we will also request the same criteria as mentioned in the workflow: min.cells=3 and min.features=200.
+```{r}
+pdac1 <- CreateSeuratObject(counts = GSM3036909, min.cells = 3, min.features = 200)
+```
+
+Quality control
+Step 3: Label the Mitochondrial genes
+We don’t want to use cells that have too many mitochondrial genes, so we create a new column to help us summarize how many mitochondrial genes were identified in the different cells.
+```{r}
+pdac1[["percent.mt"]] <- PercentageFeatureSet(pdac1, pattern = "^MT-")
+```
+
+Step 4: Visualize the distribution
+Use the VlnPlot function to view the number of counts, number of features, and the percent mitochondrial genes.
+```{r}
+VlnPlot(pdac1, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
+```
+
+Step 5: Filter data
+Only keep the cells that have greater than 200 and less than 2500 unique features and the percent mitochondrial genes is less than 5.
+```{r}
+pdac1 <- subset(pdac1, subset = nFeature_RNA > 200 & nFeature_RNA < 2500 & percent.mt < 5)
+```
+
+Normalization
+Step 6: Normalize data
+Taking the log of the data, makes the data more normal distributed. Normalize data using the LogNormaliza method with a scale factor of 10,000
+```{r}
+pdac1 <- NormalizeData(pdac1, normalization.method = "LogNormalize", scale.factor = 10000)
+```
+
+Step 6: Calculate gene variation
+Find the 2000 most variable genes using the FindVariableFeatures command using the vst method.
+```{r}
+pdac1 <- FindVariableFeatures(pdac1, selection.method = "vst", nfeatures = 2000)
+```
+
+PCA
+Step 7: Scale data
+Scaling the data normalizes the standard deviation and centers the data. This is an important step before performing PCA.
+```{r}
+all.genes <- rownames(pdac1)
+pdac1 <- ScaleData(pdac1, features = all.genes)
+```
+
+Step 8: PCA
+Run PCA
+```{r}
+pdac1 <- RunPCA(pdac1, features = VariableFeatures(object = pdac1))
+```
+
+Step 9: Visualize data using VizDimLoadings and DimPlot functions. Can you tell from the PCA analyis, the number of cell types that are present?
+```{r}
+VizDimLoadings(pdac1,  reduction = "pca")
+DimPlot(pdac1, reduction = "pca")
+```
+
+Step 10: PCA heatmaps
+Another way to visualize the variation explained by the PC is creating heatmaps. Create heatmaps of the first 10 dimensions and include 200 cells.
+```{r}
+DimHeatmap(pdac1, dims = 1:10, cells = 200, balanced = TRUE)
+```
+
+Step 11: Dimensionality
+To make this more quantitative, let’s see when does the variation reach the lowest amount of variation explained. Use the JackStraw method with 100 replicates and score the first 20 dimensions.
+```{r}
+pdac1 <- JackStraw(pdac1, num.replicate = 100)
+pdac1 <- ScoreJackStraw(pdac1, dims = 1:20)
+```
+
+Plot the results for the first 20 dimensions.
+```{r}
+JackStrawPlot(pdac1, dims = 1:20)
+```
+
+Use the elbow plot
+```{r}
+ElbowPlot(pdac1)
+```
+
+Step 12: Clustering.
+Now we will group together the cells based on where they are located in the different dimensions. Use the FindNeighbors function using the first 9 dimensions.
+
+And then identify the clusters usng the FindClusters function.
+```{r}
+pdac1 <- FindNeighbors(pdac1, dims = 1:9)
+pdac1 <- FindClusters(pdac1, resolution = 0.5)
+```
+
+tsne/umap
+Step 13: Perform a UMAP analysis using the first 9 dimensions using RunUMAP and then visualize it using DimPlot.
+```{r}
+pdac1 <- RunUMAP(pdac1, dims = 1:9)
+DimPlot(pdac1, reduction = "umap")
+```
+
+How many clusters do you get? How many possible mistakes do you see?
+answer: there shows 8 clusters and > 16 mistakes.
+
+Step 14: Identify the markers that compare each cluster agains all. Report only positively markers. Use the FindAllMarkers for this.
+```{r}
+pdac1.markers <- FindAllMarkers(pdac1, only.pos = TRUE)
+
+pdac1.markers %>%
+  group_by(cluster) %>%
+  top_n(n = 1, wt = avg_log2FC) -> top1_clusterMarkers
+```
+
+Step 15: Create a violin plot using one feature from each cluster.
+```{r}
+VlnPlot(pdac1, features = top1_clusterMarkers$gene)
+```
+
+Step 16: Create a feature plot using the same features as before
+```{r}
+FeaturePlot(pdac1, features = top1_clusterMarkers$gene)
+```
+

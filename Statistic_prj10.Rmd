@@ -1,0 +1,65 @@
+---
+title: "wk10 assynment"
+author: "Xiaoyan Wen"
+date: "11/8/2020"
+output: word_document
+---
+```{r}
+# according to data description, 
+# column 1 - unit number; 2 - time(in cycle)
+# there are three operational settings may have a substantial effect on engine performance - column 3-5
+# in the training dataset, the degradation grows till a threshold beyond usage; in the test set, the time series ends prior to complete degradation
+```
+
+```{r setup}
+library(survival)
+library(survminer)
+library(readr)
+library(dplyr)
+```
+
+
+```{r read dataset}
+# read data set from Challenge data
+test <- read_table2("~/R_project/biostatistics2/test.txt", col_names = FALSE)
+train <- read_table2("~/R_project/biostatistics2/train.txt", col_names = FALSE)
+
+summary(test);summary(train)
+```
+
+
+
+```{r extract data}
+# obtain summarized time data for both "dead" and "censored" event
+test[,1:5] %>% group_by(test$X1) %>% summarise(time = max(X2),
+                                               op_setting1 = median(X3),
+                                               op_setting2 = median(X4),
+                                               op_setting3 = median(X5),
+                                               event = 0
+                                               ) -> cesor_set
+
+
+
+train[,1:5] %>% group_by(train$X1) %>% summarise(time = max(X2),
+                                               op_setting1 = median(X3),
+                                               op_setting2 = median(X4),
+                                               op_setting3 = median(X5),
+                                               event = 1
+                                               ) -> event_set
+
+
+# combine to dat 
+rm(dat)
+dat <- cbind(id = c(1:436), rbind(cesor_set[,2:6], event_set[,2:6]))
+summary(dat)
+```
+
+```{r, fit cox model}
+# fit to cox hazard model
+surv_object <- Surv(dat$time, dat$event )
+cx <- coxph(surv_object ~ op_setting1 + op_setting2 + op_setting3, data = dat)
+cx
+
+ggforest(cx)
+```
+

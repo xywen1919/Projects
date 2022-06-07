@@ -1,0 +1,398 @@
+---
+title: "Final Project B - R Notebook"
+output: html_notebook
+---
+
+In this project, you will conduct a GWAS of coronary artery disease (CAD) using case-control data from the PennCATH study introduced in Assignment 3. Your assignment is to filter the SNP data using code from Steps 1-5 of the Reed et al (2015) workflow (Assignment 3), and then conduct a chi-square test (or 
+Cochran-Armitage test; see below) of independence of dichotomized case-control status for each of the genotyped SNPs. You will then write a short report on your findings.
+
+##### About the data
+
+The data are from Reed et al. (2015) GWAS workflow from Assignment 3. In addition to HDL, LDL, and Triglyceride traits and genotypes for 1,401 human samples, the clinical data also include the case-control
+status of coronary artery disease (CAD) which you will attempt map with the case-control GWAS approach.
+
+##### Completing your assignment
+
+If possible, use RStudio to create an Rmarkdown (.Rmd) file then use the Knit dropdown menu in RStudio to knit a .html report. Include in the .Rmd and .html files your code and any required figures embedded in your report after each question. If you prefer, you may submit all figures, text and code in an alternate format. Please upload the .Rmd and .html or .pdf files at the "Assignments" link on NYU Classes along with any other requested files such as the table with SNP information and association statistics.
+
+
+##### Tasks
+
+You will write an R script to conduct all analysis below.
+
+The input files (including clinical phenotypes and SNP data for 1,401 samples), the GWAS_master.R script (introduced in Week 10 recitation), and accompanying files are available here:
+
+https://drive.google.com/drive/folders/17xLDCdv77gYwu55PEeGa6KJ3ZyRdolD1?usp=sharing
+
+You will filter the SNPs and samples using the GWAS_master.R script as in assignment 3 using steps 1-5. You may use the "genotype" variable (a snpStat SnpMatrix object) at the end of Step 5 as the starting point for your case-control GWAS (the remainder of the script can be ignored). Please use the filtered SNPs and samples in your analysis, although if there are any samples with missing case-control status in the CAD column of the clinical phenotype data, you may also need to drop those samples from the genotype data.
+
+Use the case-control status (in the CAD column of the file GWAStutorial_clinical.csv) (see Assignment 3) to perform the GWAS.
+
+Calculate the Odds Ratio for each SNP. You may report either the allelic odds ratio or the homozygote odds ratio or both (see Pearson et al. 2008 Table 3)
+
+You may conduct 2 x 2 or 2 x 3 Chi-square tests with 1 or 2 degrees of freedom as in Table 3 of Pearson et al. (2008) (e.g., using chisq.test function in base R) or you may conduct a Cochran-Armitage test as  performed by single.snp.tests function in the snpStats package.
+
+Depending on how you conduct your analysis, you may find some useful approaches in the snpStats vignettes. For example, this vignette shows an approach for easily splitting cases and control genotypes followed by use of the snpStats col.summary function to get genotype frequencies at each SNP (which you can use to get genotype counts necessary for chi-square tests or odds ratio calculation)
+https://www.bioconductor.org/packages/release/bioc/vignettes/snpStats/inst/doc/snpStats-vignette.R
+
+Hints:
+If you decide to use chisq.test (?chisq.test), this function performs both contingency tests and good-of-fit tests, but you will want to do a contingency test. 
+
+Hint: you can extract p-values and other info from output object using, for example, chisq.test(matrix(c(2,4,6,8)))$p.value. See ?chisq.test "Value" section for how to access different values from output object.
+
+Here are the requirements for your report:
+
+(1) A 1-2 page report with short introduction, methods, results, and discussion. The introduction and discussion can be minimal describing the case-control GWAS approach and highlighting key findings. The methods should be detailed summarizing all packages you used, the genotype and sample filtering approach from the Reed et al. workflow, a description of the statistics (including mention of Bonferroni correction and the significance threshold applied) and how you calculated the odds ratio. The results section should be detailed and include a description of the 10 most significant SNPs (reported in a table; see below).
+(2) A table with the top 10 most significant SNPs, their rs number, the test statistic (e.g., chi-square value), their p-value (including whether they passed the Bonferroni significance threshold) the odds ratio for each SNP.
+(3) Your discussion should comment on whether the any of the top 10 SNPs were also significant in your LDL analysis from Assignment 3. 
+(4) A supplementary table with all SNPs in the GWAS analysis and a minimum of their rs number, test statistic and their P-value from the GWAS. Odds ratio could also be included for all SNPs in the supplementary table but is optional.
+(5) An appendix with all your R code which should be detailed enough to reproduce all results.
+
+
+##### Literature Cited
+
+Pearson TA, Manolio TA. (2008) How to Interpret a Genome-wide Association Study. Journal of the American Medical Association. 299(11):1335-1344
+
+Reed E et al. (2015) A guide to genome-wide association analysis and post-analytic interrogation. Statistics in Medicine. 34:3769–3792
+
+
+```{r}
+# ------- global --------
+# data input and output directories set
+data.dir <- "./GWASTutorial_Files"
+out.dir <- "./GWAS_out"
+
+# Input files
+gwas.fn <- lapply(c(bed='bed', bim='bim',fam='fam',gds='gds'), 
+                  function(n) sprintf("%s/GWAStutorial.%s",data.dir,n))
+clinical.fn <- sprintf('%s/GWAStutorial_clinical.csv',data.dir)
+onethou.fn = lapply(c(info='info', ped='ped'),
+                    function(n) sprintf('./GWASTutorial_Files/chr16_1000g_CEU.%s', n))
+protein.coding.coord.fname <- sprintf('%s/ProCodgene_coords.csv', data.dir)
+
+
+# Output files
+gwaa.fname <- sprintf('%s/GWAStutorial.out.txt', out.dir)
+gwaa.unadj.fname <- sprintf("%s/GWAStutorialoutUnadj.txt", out.dir)
+impute.out.fname <- sprintf("%s/GWAStutorial_imputationOut.csv", out.dir)
+CETP.fname <- sprintf('%s/CETP_GWASout.csv', out.dir)
+
+
+```
+
+
+```{r}
+# ---Step 1 - Read Data into R----
+# In order to read the .fam, .bim, and .bed files in R, we use the **read.plink()** function in the Bioconductor **snpStats** package. 
+# The genotype slot of the resulting list contains an SnpMatrix object, which is a matrix of genotype data with a column for each SNP and a row for each study participant.
+
+library(snpStats)
+
+## Read in PLINK files to create list of SNPs ------
+geno<- read.plink(gwas.fn$bed, gwas.fn$bim, gwas.fn$fam, na.strings=('-9'))
+
+# obtain genotype SnpMatrix object from generated list
+# Note: Phenotypes and covariates will be read from clinical data file in another step.
+genotype<- geno$genotype
+print(genotype)
+
+
+# Obtain SNP information table from list
+genoBim <- geno$map
+colnames(genoBim) <- c("chr",'SNP', 'gen.dist', 'position', 'A1', 'A2')
+print(head(genoBim))
+
+# remove raw file to open up memory
+rm(geno)
+
+## ----- Read in clinical data ------
+
+clinical <- read.csv(clinical.fn, colClasses = c('character','factor','factor',rep('numeric',4)))
+rownames(clinical)<-clinical$FamID
+print(head(clinical))
+
+## step1_ subset genotype for individuals with clinical data ------
+
+print("beginning genotypes") 
+print(genotype)
+genotype<-genotype[clinical$FamID,]
+print('ending genotypes') 
+print(genotype)
+
+```
+
+```{r}
+# --- Step 2 ---- SNP filtering-------
+
+# Create SNP statistics which we will use to filter (MAF, call rate, etc.)
+snpsum.col <- col.summary(genotype)
+print(head(snpsum.col))
+
+
+# set thresholds for filtering
+call <- 0.95
+minor <- 0.01
+
+# filter on MAF and call rate
+use<- with(snpsum.col, (!is.na(MAF) & MAF>minor) & Call.rate >= call)
+use[is.na(use)]<- FALSE
+
+# Subset genotype and SNP summary data for SNPs that pass the MAF and call rate criteria
+genotype <- genotype[,use]
+snpsum.col<- snpsum.col[use,]
+print(genotype)
+```
+
+
+```{r}
+# ---Step 3 -- sample level filtering --------
+# filtering by individual for individuals with poor data quality
+
+library(SNPRelate)
+library(plyr)
+
+# Create sample statistics (Call rate, heterozygosity)
+snpsum.row <- row.summary(genotype)
+print(head(snpsum.row))
+
+# reset memory size
+memory.limit(size=56000)
+
+# add the F stat (inbreeding coefficient) to snpsum.row
+MAF <- snpsum.col$MAF
+callmatrix <- !is.na(genotype)
+
+hetExp <- callmatrix %*% (2*MAF*(1-MAF))
+hetObs <- with(snpsum.row, Heterozygosity*(ncol(genotype))*Call.rate)
+snpsum.row$hetF <- 1-(hetObs/hetExp)
+head(snpsum.row)
+
+# check dimension before filtering
+dim(genotype)
+dim(snpsum.row)
+
+# setting thresholds for filtering
+sampcall <- 0.95  
+hetcutoff <- 0.1  
+
+# filter on call rate and inbreeding coefficient
+sampleuse <- with(snpsum.row, !is.na(Call.rate) & Call.rate >sampcall & abs(hetF)<= hetcutoff)
+sampleuse[is.na(sampleuse)] <- FALSE
+
+# subset genotype, snpsum.row and clinical data according to the filtering
+genotype <- genotype[sampleuse,]
+clinical <- clinical[rownames(genotype),]
+snpsum.row <- snpsum.row[sampleuse,]
+
+# check dimension after filtering
+dim(genotype)
+dim(snpsum.row)
+
+```
+
+```{r}
+# ---Step 4 - Filter SNPs by kinship and linkage to diminish  chromosomal artifacts------
+# set thresholds
+kin.thresh <- 0.1 #threshold for kinship
+ld.thresh <- 0.2 #threshold of linkage
+
+# Create gdsfile requires for SNPRelate functions
+snpgdsBED2GDS(gwas.fn$bed, gwas.fn$fam, gwas.fn$bim, gwas.fn$gds)
+genofile <- snpgdsOpen(gwas.fn$gds, readonly = FALSE)
+
+# cleanup gds data
+gds.ids <- read.gdsn(index.gdsn(genofile, 'sample.id'))
+gds.ids <- sub('-1', '', gds.ids)
+add.gdsn(genofile, 'sample.id', gds.ids, replace=TRUE)
+
+# Prune SNPs for IBD analysis
+set.seed(1000)
+geno.sample.ids <- rownames(genotype)
+snpSUB <- snpgdsLDpruning(genofile, ld.threshold = ld.thresh,
+                          sample.id = geno.sample.ids, #only analyze the filtered samples
+                          snp.id= colnames(genotype))  #only analyze the filtered SNPs
+snpset.ibd <- unlist(snpSUB, use.names = FALSE)
+
+
+# Find IBD coeffiencts using the Methods of Moments procedure. Include pairwise kinship
+ibd<- snpgdsIBDMoM(genofile, kinship = TRUE, sample.id = geno.sample.ids,
+                   snp.id = snpset.ibd, num.thread = 1)
+ibdcoeff <- snpgdsIBDSelection(ibd) #Pairwise sample comparison
+head(ibdcoeff)
+
+# Check if there are candidates for relatedness
+ibdcoeff <- ibdcoeff[ibdcoeff$kinship >= kin.thresh,]
+
+# iteratively remove samples with high kinship starting with sample with the most pairings
+related.samples <- NULL
+while(nrow(ibdcoeff)>0){
+  #count the number of occurrences of each and take the top one 
+  sample.counts <- arrange(count(c(ibdcoeff$ID1, ibdcoeff$ID2)), -freq)
+  rm.sample <- sample.counts[1,'x']
+  cat('Removing sample', as.character(rm.sample), 'too closely related to', sample.counts[1,'freq'], 'other samples. \n')
+  
+  #remove for ibdcoeff and and to list
+  ibdcoeff <- ibdcoeff[ibdcoeff$ID1 != rm.sample & idbcoeff$ID2 != rm.sample, ]
+  related.samples <- c(as.characer(rm.sample), related.samples)
+}
+
+# check dimension before filtering
+dim(genotype)
+dim(clinical)
+
+# filter genotype and clinical to include only unrelated samples
+genotype <- genotype[!(rownames(genotype) %in% related.samples),]
+clinical <- clinical[!(clinical$FamID %in% related.samples),]
+geno.sample.ids<- rownames(genotype)
+
+# check dimension after filtering
+dim(genotype)
+dim(clinical)
+
+print(genotype)
+
+```
+
+
+```{r}
+#---Step 5 - Hard-Weinberg SNP filtering-----------
+library(gdsfmt)
+
+# set HWE cut-off
+hardy<- 10^-6  
+
+# screen CAD controls to remove SNPs with HWE test statistic p value less than 1 × 10−6 
+CADcontrols<- clinical[clinical$CAD==0, 'FamID']
+snpsum.colCont <- col.summary(genotype[CADcontrols, ])
+
+HWEuse<- with(snpsum.colCont, !is.na(z.HWE)&(abs(z.HWE)<abs(qnorm(hardy/2))))
+HWEuse[is.na(HWEuse)]<- FALSE  
+
+# remove file to open up memory
+rm(snpsum.colCont)
+
+# check dimension before filtering
+dim(genotype)
+
+# subset genotype and SNP summary data for SNPs that pass HWE criteria
+genotype<- genotype[,HWEuse]
+
+# check dimension after filtering
+dim(genotype)
+
+```
+
+```{r}
+# check the clinical data summary
+summary(clinical)
+
+# subset genoBim for the filtered SNPs
+genoSupport <- genoBim[colnames(genotype),]
+dim(genoSupport)
+
+# check the genotype data summary
+summary(genotype)
+
+snpsum <- col.summary(genotype)
+par(mfrow=c(1,2))
+hist(snpsum$MAF)
+hist(snpsum$z.HWE)
+
+samplesum <- row.summary(genotype)
+par(mfrow=c(1,1))
+plot(samplesum)
+
+```
+
+```{r}
+# case/control analysis 
+# for CAD case and control, check for  differences of call rate or allele frequency between groups
+snpsum_cases <- col.summary(genotype[clinical$CAD == 1,])
+snpsum_controls <- col.summary(genotype[clinical$CAD == 0,])
+
+library(hexbin)
+sp <- plot(hexbin(snpsum_controls$Call.rate, snpsum_cases$Call.rate, xbin=50))
+hexVP.abline(sp$plot.vp, 0, 1, col="black")
+
+sp2 <- plot(hexbin(snpsum_controls$MAF, snpsum_cases$MAF, xbin=50))
+hexVP.abline(sp2$plot.vp, 0, 1, col="white")
+```
+
+```{r}
+# test for associations between SNP and CAD 
+tests <- single.snp.tests(CAD, data = clinical, snp.data = genotype)
+summary(tests)
+
+# manhattan plot and the corresponding Q-Q plot for p value
+library(qqman)
+result <- cbind(genoSupport[,c('SNP','chr', 'position')], P = p.value(tests,df=1))
+names(result) <- c('SNP', 'CHR', 'BP', 'P')
+head(result)
+
+manhattan(result)
+qq(result$P, main = "Q-Q plot of p-values", pch = 18, col = "blue4", cex = 1.5)
+```
+
+```{r}
+# p value and chi square for 2x3 and 2x3 table
+p1 <- p.value(tests,df=1)
+chi_sq1 <- chi.squared(tests, df=1)
+
+p2 <- p.value(tests,df=2)
+chi_sq2 <- chi.squared(tests,df=2)
+
+# odds ratio table
+or_table <- data.frame(row.names = rownames(snpsum_cases), 
+                       a1_case = snpsum_cases$Calls*snpsum_cases$RAF, 
+                       a2_case = snpsum_cases$Calls*snpsum_cases$MAF,
+                       a1_ctrl = snpsum_controls$Calls*snpsum_controls$RAF,
+                       a2_ctrl = snpsum_controls$Calls*snpsum_controls$MAF, 
+                       aa_case = snpsum_cases$Calls*snpsum_cases$P.AA, 
+                       ab_case = snpsum_cases$Calls*snpsum_cases$P.AB,
+                       bb_case = snpsum_cases$Calls*snpsum_cases$P.BB,
+                       aa_ctrl = snpsum_controls$Calls*snpsum_controls$P.AA,
+                       ab_ctrl = snpsum_controls$Calls*snpsum_controls$P.AB,
+                       bb_ctrl = snpsum_controls$Calls*snpsum_controls$P.BB)
+
+
+# compute odds ratio & add columns of chi-square and p-value
+or_table$or_allelic <- (or_table$a1_case*or_table$a2_ctrl)/(or_table$a2_case*or_table$a1_ctrl)
+or_table$chi_sq_allelic <- chi_sq1
+or_table$p_val_allelic <- p1
+or_table$p_adj_allelic <- p.adjust(p1, method = "bonferroni")
+
+or_table$or_homozygote <- (or_table$aa_case*or_table$bb_ctrl)/(or_table$bb_case*or_table$aa_ctrl)
+or_table$chi_sq_homozygote <- chi_sq2
+or_table$p_val_homozygote <- p2
+or_table$p_adj_homozygote <- p.adjust(p1, method = "bonferroni")
+
+summary(or_table)
+
+# write OR result as a csv file
+write.csv(or_table,"GWAA_CAD_OR.csv")
+```
+
+```{r}
+# report top10 significant SNPs & compared to LDL result
+
+# top 10 most significant SNPs - allelic odds
+head(or_table[order(or_table$p_val_allelic),c(11:18)],10)
+
+# top 10 most significant SNPs - homozygote odds
+head(or_table[order(or_table$p_val_homozygote),c(11:18)],10)
+
+
+# read GWAA_ldl result
+GWAA_ldl <- read.csv("GWAA_ldl.txt", sep="")
+
+# significant SNP names for allelic/homozygote odds compute
+snp_allelic_sig <- rownames(head(or_table[order(or_table$p_val_allelic),],10))
+snp_allelic_sig
+snp_homozygote_sig <- rownames(head(or_table[order(or_table$p_val_homozygote),],10))
+snp_homozygote_sig
+
+# subset GWAA LDL analysis result using significant SNP names
+GWAA_ldl_allelic_sig <- subset(GWAA_ldl, SNP %in% snp_allelic_sig)
+GWAA_ldl_allelic_sig
+```
+

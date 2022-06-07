@@ -1,0 +1,451 @@
+---
+title: "NGS_Week1_assignment"
+author: "XiaoyanWen"
+date: "4/15/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(eval = FALSE)
+```
+
+### Next Generation Sequence Analysis Homework Week 11
+
+ChiP-seq is a common NGS application that aims to characterize either the locations of protein (e.g., transcription factors binding to DNA) or of histone modifications ("histone marks") which impact chromatin structure.
+
+In Week 11 and 12, you will analyze a transcription factor (TF) ChIP-seq dataset from a biopsy of prostate cancer tumors. This week you will align reads from ChIP samples and a control to the human reference genome and apply a narrow peak-calling method.
+
+#### About the data
+
+The data are single end (1 x 65 bp) fastqs sequenced on an Illumina Hi-Seq sequencer by Singh et al. 2018: <https://www.life-science-alliance.org/content/2/1/e201800115>
+
+A description of the data is available at the Gene Expression Omnibus site here: <https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE114737>
+
+The SRA Run Selector page containing information about all samples in the study is here: <https://www.ncbi.nlm.nih.gov/Traces/study/?acc=PRJNA472620&o=acc_s%3Aa&s=SRR7207089,SRR7207011>
+
+The SRA run accession number for the reads are:
+
+[SRR7207011]{.ul} is the Androgen Receptor (AR) ChIP from patient 1 tumor (P1_AR_DSG) [SRR7207017]{.ul} is the Androgen Receptor (AR) ChIP from patient 2 tumor (P2_AR_DSG) [SRR7207089]{.ul} is the "input" (P_Input_DSG)
+
+#### Task 1:Download reads using the sra toolkit.
+
+All tasks in this assignment should be written to a directory on your /scratch on Greene (e.g., ngs.week11)
+
+Begin by downloading the ChIP-seq data for the ChIPs of Androgen Receptor (AR) from tumors from two patients and a control (="input") sample.
+
+The data can be downloaded from the Sequence Read Archive (SRA) using the **sra-tools** software. The run accession numbers listed in the "About the Data" section can be used in three separate command lines as illustrated below.
+
+The data are single-end data, so an appropriate command line in this case is:
+
+    fastq-dump -I <SRR number>
+
+Q1.1 Log in to Greene and create a slurm script that downloads the data. The script should load the most recent sra-tools module then download the three fastq file. Execute your script and report the contents and the names of the fastq files in your /scratch. \[ 1 point \].
+```{bash}
+#!/bin/bash                                                                                               
+#
+#SBATCH --nodes=1
+#SBATCH --tasks-per-node=1
+#SBATCH --cpus-per-task=1
+#SBATCH --time=8:00:00
+#SBATCH --mem=8GB
+#SBATCH --job-name=slurm_sra
+#SBATCH --mail-type=FAIL
+#SBATCH --mail-user=xw2470@nyu.edu
+module purge
+
+echo script begin: $(date)
+
+module load sra-tools/2.10.9
+vdb-config -i
+
+fastq-dump -I SRR7207011
+fastq-dump -I SRR7207017
+fastq-dump -I SRR7207089
+
+module purge
+
+echo script completed: $(date)
+```
+
+the contents and the names of the fastq files in my /scratch:
+![](fastq.png)
+
+#### Task 2: Run fastp to process the reads
+
+Neither the publication or the SRA pages indicate how or if the reads archived have been pre-processed. In this instance, it is best to re-process to remove adapters with fastp which has an automated adapter detection function (i.e., does not require knowledge of the adapters used in the library prep).
+
+Begin by reviewing the fastp Github page. Please read the section "adapters" and confirm that adapters in single end data can be automatically detected and trimmed by fastp. You may also wish to review Week 2 Task 1.
+
+<https://github.com/OpenGene/fastp>
+
+Q2.1 Create a slurm script that will process the single-end reads downloaded in Task 1 using fastp.
+
+Your fastp commands should remove adapters and should set an appropriate minimum length for processed reads. Note that because the reads were generated on a Illumina HiSeq 2500 platform, you should not include the --polyG trimming option, but should include --length_required with a length between 36 and 65 (this is a 1 x 65 bp run) since fastp will by default retain reads that have been trimmed to 15 bp (which is too short to be useful).
+
+Execute your script and report its contents for your answer \[ 1 point \].
+```{bash}
+#!/bin/bash
+#
+#SBATCH --nodes=1
+#SBATCH --tasks-per-node=1
+#SBATCH --cpus-per-task=1
+#SBATCH --time=8:00:00
+#SBATCH --mem=8GB
+#SBATCH --job-name=slurm_fastp
+#SBATCH --mail-type=FAIL
+#SBATCH --mail-user=xw2470@nyu.edu
+
+#SBATCH --output=slurm_%j.out
+#SBATCH -o slurm.%N.%j.out # STDOUT
+#SBATCH -e slurm.%N.%j.err # STDERR
+
+module purge
+
+echo script begin: $(date)
+
+# load the desired software
+module load fastp/intel/0.20.1
+
+# Execute the fastp
+fastp -i /scratch/xw2470/ngs.week11/SRR7207011.fastq \
+-o out.SRR7207011.fastq \
+--length_required 36 \
+--length_limit 65
+
+fastp -i /scratch/xw2470/ngs.week11/SRR7207017.fastq \
+-o out.SRR7207017.fastq \
+--length_required 36 \
+--length_limit 65
+
+fastp -i /scratch/xw2470/ngs.week11/SRR7207089.fastq \
+-o out.SRR7207089.fastq \
+--length_required 36 \
+--length_limit 65
+
+module purge
+
+echo script completed: $(date)
+```
+
+Result content:
+![](out.png)
+
+![](slurm.err.png)
+
+#### Task 3: Align ChIP-seq reads to the human reference genome
+
+Which aligner to choose is often unclear as the performance of different aligners in the context of peak-calling is poorly understood. Bowtie2 is a common choice as is BWA. BWA has been found to align a greater percentage of reads then Bowtie2 which can lead to 30% increase in the number of peaks called (see <https://hbctraining.github.io/Intro-to-ChIPseq/lessons/03_align_and_filtering.html>), but whether these are true peaks or artifacts is unknown.
+
+In any event, for this exercise, we will follow the published article for these data and will align with BWA. You may wish to review the BWA mem documentation here taking care to review how to align single-end data.
+
+<http://bio-bwa.sourceforge.net/bwa.shtml>
+
+The human reference genome is located at the following path and the samtools faidx and bwa index files are located in the same directory:
+
+`/scratch/work/courses/BI7653/hw3.2022/hg38/Homo_sapiens.GRCh38.dna_sm.primary_assembly.normalized.fa`
+
+After loading the BWA module (most recent version), your script should align the three single-end fastp-processed fastqs as follows:
+
+    bwa mem -M -t $SLURM_CPUS_PER_TASK <reference fasta> <fastq> > <sam>
+
+note: the SLURM_CPUS_PER_TASK environmental variable contains the value of the `#SBATCH --cpus-per-task` argument. You can modify the `--cpus-per-task` directive to say 4 or 8 cpus for shorter run times.
+
+Q3.1. Execute your script and report its contents for your answer \[ 1 point \].
+```{bash}
+#!/bin/bash
+#
+#SBATCH --nodes=1
+#SBATCH --tasks-per-node=1
+#SBATCH --cpus-per-task=8
+#SBATCH --time=8:00:00
+#SBATCH --mem=8GB
+#SBATCH --job-name=slurm_bwa
+#SBATCH --mail-type=FAIL
+#SBATCH --mail-user=xw2470@nyu.edu
+#SBATCH --output=slurm_%j.out
+#SBATCH -o slurm.%N.%j.out # STDOUT
+#SBATCH -e slurm.%N.%j.err # STDERR
+module purge
+
+echo script begin: $(date)
+
+# Load the bwa mem module
+module load bwa/intel/0.7.17
+
+# Execute the bwa
+bwa mem -M -t $SLURM_CPUS_PER_TASK \
+/scratch/work/courses/BI7653/hw3.2022/hg38/Homo_sapiens.GRCh38.dna_sm.primary_assembly.normalized.fa \
+out.SRR7207011.fastq > SRR7207011.sam
+
+bwa mem -M -t $SLURM_CPUS_PER_TASK \
+/scratch/work/courses/BI7653/hw3.2022/hg38/Homo_sapiens.GRCh38.dna_sm.primary_assembly.normalized.fa \
+out.SRR7207017.fastq > SRR7207017.sam
+
+bwa mem -M -t $SLURM_CPUS_PER_TASK \
+/scratch/work/courses/BI7653/hw3.2022/hg38/Homo_sapiens.GRCh38.dna_sm.primary_assembly.normalized.fa \
+out.SRR7207089.fastq > SRR7207089.sam
+
+module purge
+
+echo script completed: $(date)
+```
+
+result:
+![](align.png)
+![](align.err.png)
+
+
+Q3.2. When your alignments from Q3.1 have completed, create a script that will conduct the following 3 steps to prepare the BAMs for downstream analysis. The expected output is 3 coordinate-sorted BAM files and 3 BAM index files. (note: the simplest approach is to just run each of the required commands below three times, once for SAM). Obviously, you will need to use appropriate output filenames at each step.
+
+Steps 1 through 3 below must be run for each of the three SAMs produced by Q3.1. Be sure to load the most recent module for each tool and request 46GB of RAM in your job owing to the high memory requirement of the coordinate sorting step.
+
+Step 1: convert each SAM to BAM using Samtools.
+
+Please use samtools view with options to convert SAM to BAM and retain the header information
+
+You can review samtools view documentation here: <http://www.htslib.org/doc/samtools.html>
+
+Here is the command (to be run 3 times, once on each SAM):
+
+    samtools view -b -h <sam> > <bam>
+
+```{bash}
+#!/bin/bash
+#
+#SBATCH --nodes=1
+#SBATCH --tasks-per-node=1
+#SBATCH --cpus-per-task=1
+#SBATCH --time=5:00:00
+#SBATCH --mem=32GB
+#SBATCH --job-name=slurm_template
+#SBATCH --mail-type=FAIL
+#SBATCH --mail-user=xw2470@nyu.edu
+
+module purge
+
+echo script begin: $(date)
+
+module load samtools/intel/1.14
+
+samtools view -b -h SRR7207011.sam > SRR7207011.bam
+samtools view -b -h SRR7207017.sam > SRR7207017.bam
+samtools view -b -h SRR7207089.sam > SRR7207089.bam
+
+module purge
+
+echo script completed: $(date)
+
+```
+
+![](sam2bam.png)
+
+Step 2: Coordinate sort reads with Picard tools.
+
+note: Coordinate-sorting is one of the most memory intensive operations in NGS and benefits from more memory (RAM). Here we request 46GB of memory via SBATCH and then provide 44GB of memory to the Java Virtual Machine (JVM). This leaves 2 GB of memory as overhead. The PICARD_JAR environmental variable specifies the location of the Java archive (.jar). Use the module show command to see the environmental variables specific to each software module.
+
+    java -Xmx44g -jar $PICARD_JAR SortSam \
+    INPUT=<input sample bam> \
+    OUTPUT=<output sample bam> \
+    SORT_ORDER=coordinate \
+    TMP_DIR="${SLURM_JOBTMP}" \
+    MAX_RECORDS_IN_RAM=10000000 \
+    VALIDATION_STRINGENCY=LENIENT
+
+Step 3: Create a BAM index
+
+Recall that it is always necessary to create a BAM index file on any coordinate-sorted BAM. It is not possible to created a BAM index for a file that is not coordinate-sorted.
+
+If you do not remember how to create a BAM index, see here:
+
+<http://www.htslib.org/doc/samtools.html>
+
+Execute your script and report its contents for your answer. \[ 3 points \].
+```{bash}
+#!/bin/bash
+#
+#SBATCH --nodes=1
+#SBATCH --tasks-per-node=1
+#SBATCH --cpus-per-task=1
+#SBATCH --time=48:00:00
+#SBATCH --mem=44GB
+#SBATCH --job-name=align_processing
+#SBATCH --mail-type=FAIL
+#SBATCH --mail-user=xw2470@nyu.edu
+#SBATCH --array=1-30
+
+module purge
+
+echo script start: $(date)
+
+# load picard module
+module load picard/2.17.11
+
+# Coordinate sort reads with Picard tools
+java -Xmx44g -jar $PICARD_JAR SortSam \
+INPUT=SRR7207011.bam \
+OUTPUT=SRR7207011.sorted.bam \
+SORT_ORDER=coordinate \
+TMP_DIR="${SLURM_JOBTMP}" \
+MAX_RECORDS_IN_RAM=10000000 \
+VALIDATION_STRINGENCY=LENIENT
+
+java -Xmx44g -jar $PICARD_JAR SortSam \
+INPUT=SRR7207017.bam \
+OUTPUT=SRR7207017.sorted.bam \
+SORT_ORDER=coordinate \
+TMP_DIR="${SLURM_JOBTMP}" \
+MAX_RECORDS_IN_RAM=10000000 \
+VALIDATION_STRINGENCY=LENIENT
+
+java -Xmx44g -jar $PICARD_JAR SortSam \
+INPUT=SRR7207089.bam \
+OUTPUT=SRR7207089.sorted.bam \
+SORT_ORDER=coordinate \
+TMP_DIR="${SLURM_JOBTMP}" \
+MAX_RECORDS_IN_RAM=10000000 \
+VALIDATION_STRINGENCY=LENIENT
+
+
+# load samtools module
+module load samtools/intel/1.14
+
+# create BAM index
+samtools index SRR7207011.sorted.bam
+samtools index SRR7207017.sorted.bam
+samtools index SRR7207089.sorted.bam
+
+model purge
+echo script completed: $(date)
+```
+
+result files:
+![](sort.png)
+
+Q3.3 An important issue in ChIP-seq is whether to remove multiply-mapped reads. Allowing multiply-mapped reads in the analysis increases the number of reads and may increase the sensitivity of peak detection, but may also have a cost such as an increase in false positives. It is common to remove multiply-mapped reads in ChIP-seq analysis.
+
+Reads that map to multiple locations in the reference genome are randomly assigned to one of the target locations by the BWA aligner. BWA MEM will mark such multiply mapped reads with a mapping quality of 0 (note: the is a BWA convention a may vary for different aligners). Create a `samtools view` command that filters out reads with mapping quality less than 20 using the `-q` option. Your command should also preserve the header information in the output BAM using `-h`.
+
+Then index each of the new BAMs.
+
+Execute your commands separately on all three BAMs in a slurm script to produce new BAMs with low mapping quality reads removed and their index files. Report your script for your answer \[ 1 point \].
+```{bash}
+#!/bin/bash
+#
+#SBATCH --nodes=1
+#SBATCH --tasks-per-node=1
+#SBATCH --cpus-per-task=1
+#SBATCH --time=5:00:00
+#SBATCH --mem=32GB
+#SBATCH --job-name=filtlowq_template
+#SBATCH --mail-type=FAIL
+#SBATCH --mail-user=xw2470@nyu.edu
+
+module purge
+
+echo script begin: $(date)
+
+module load samtools/intel/1.14
+
+samtools view -h -q 20 SRR7207011.sorted.bam -o SRR7207011.sorted.lowqfiltered.bam
+samtools view -h -q 20 SRR7207017.sorted.bam -o SRR7207017.sorted.lowqfiltered.bam
+samtools view -h -q 20 SRR7207089.sorted.bam -o SRR7207089.sorted.lowqfiltered.bam
+
+samtools index SRR7207011.sorted.lowqfiltered.bam
+samtools index SRR7207017.sorted.lowqfiltered.bam
+samtools index SRR7207089.sorted.lowqfiltered.bam
+
+module purge
+
+echo script completed: $(date)
+```
+
+
+#### Task 4: Run MACS2 to call peaks
+
+Peak-calling is an important task in any ChIP-seq application that must be conducted even before we can assess the quality of a ChIP-seq library (using FRiP scores or cross-correlation profiles, for example).
+
+The purpose of peak-calling is to identify regions with significant enrichment of reads (higher depth/density) relative to background noise. TF ChIP-seq typically have narrow peaks with high signal-to-noise making peak-calling straight forward for high quality libraries. However, signal-to-noise may be low for many libraries of this type for many reasons related to the biology of the transcription factor, the regulatory status of a gene, or the complexity of the cellular preparation. For example, a TF binding-site may be occupied by the TF in all cells, or only in a subset of cells in the preparation. The lower the occupancy of a TF the lower the expected signal-to-noise. Alternatively, a preparation of cells is often a mixture of cell types. A biopsy from a tumor, for example, may have both normal cells and cancer cells which may have very different occupancies for the TF and therefore the complexity of the cell preparation can affect the signal strength.
+
+Peak-calling is also frequently more challenging in broad peak applications (including many histone marks) and applications without a control (="input") sample (which is typically included to improve peak detection).
+
+In this task, you will run MACS2 to call narrow peaks in both Androgen Receptor ChIP biopsy libraries using the control sample as input.
+
+One of the main considerations in ChIP-seq peak-calling is how to handle duplicate reads (defined below). We previously discussed duplicate reads in re-sequencing applications, where duplicate reads (reads mapping to exact same exact location) are often caused by PCR amplification of libraries and should be removed. However, ChIP-seq applications are different from re-sequencing because target region represent only a very small portion of the genome and therefore it is much more likely that these enriched target fragments will be fragmented by chance at exact same exact location during library preparation. Therefore, reads mapping to the same location could be duplicate reads due to PCR amplification ("bad duplicates") or could be "good" duplicates (reflecting multiple template fragments that have been sheared in exact same position).
+
+How should we handle the fact that we can't distinguish between good and bad duplicates? Ideally, a ChIP-seq peak should have "high complexity" with reads mapping to many positions within the peak (as opposed to a low complexity peak with many reads mapping to a small number of positions within the peak.
+
+MACS2 attempts to limit the impact of PCR artifacts ("bad duplicates") by setting a maximum number of reads that can map to the same position. MACS calculates the maximum tags at the exact same location based on binomial distribution using 1e-5 as p-value cutoff. This behavior can be modified to keep all duplicates or manually set the maximum number of duplicates.
+
+Please review the MACS2 documentation here:
+
+<https://github.com/taoliu/MACS>
+
+You may learn more about duplicate handling under the "--keep-dup" option.
+
+The following MACS2 command will use the automated approach to the duplicate handling described above. Now create a script that will (1) load the module macs2/intel/2.1.1 (2) and execute the following command separately for EACH of the Androgen Receptor BAMs, providing the control BAM as an input. Please use the q20 BAMs output by Q3.3 as the ChIP bams.
+
+    macs2 callpeak -t <ChIP bam> -c <control bam> -f BAM -g hs -n <name of your choosing> -B -q 0.01
+
+Q4.1 Execute your script and report its contents for your answer. Retain your outputs for Week 12 assignment \[ 1 point \].
+```{bash}
+#!/bin/bash
+#
+#SBATCH --nodes=1
+#SBATCH --tasks-per-node=1
+#SBATCH --cpus-per-task=1
+#SBATCH --time=5:00:00
+#SBATCH --mem=32GB
+#SBATCH --job-name=peakcall_template
+#SBATCH --mail-type=FAIL
+#SBATCH --mail-user=xw2470@nyu.edu
+
+module purge
+
+echo script begin: $(date)
+
+module load macs2/intel/2.2.7.1
+
+macs2 callpeak \
+-t SRR7207011.sorted.lowqfiltered.bam \
+-c SRR7207089.sorted.lowqfiltered.bam \
+-f BAM -g hs -n test1 -B -q 0.01
+
+macs2 callpeak \
+-t SRR7207017.sorted.lowqfiltered.bam \
+-c SRR7207089.sorted.lowqfiltered.bam \
+-f BAM -g hs -n test2 -B -q 0.01
+
+module purge
+
+echo script completed: $(date)
+```
+
+![](peakcall.png)
+
+![](peakcall_files.png)
+Q4.2 Describe in your own words in three sentences or less the primary purpose of a transcription factor ChIP-seq experiment such as the one you are conducting this week and next \[ 1 point \].
+```{bash}
+# the primary purpose of a transcription factor chip-seq experiment is :
+- the experiment first pull down the DNAs that bind with the specific transcription factor(TF);
+- sequence these DNA fragments that binded with TF comparing different circumstances (i.e.,disease vs.control);
+- together with genome annotation, we will be able to identify genes that could be regulated by the specific TF through mapping transcription-factor binding sites and chromatin modifications.   
+```
+
+
+Q4.3. The human genome is highly repetitive. There are segmental duplications, low complexity sequence and transposable elements all of which may also harbor transcription factor binding sites. How reads map to these regions should always be a concern in NGS applications. In ChIP-seq it is common practice to remove multiply-mapped reads ('multireads'), but this is not always advisable and in fact Chung et al. 2011 argue for not removing multiply-mapped reads. Review Chung et al. 2011 <https://journals.plos.org/ploscompbiol/article?id=10.1371/journal.pcbi.1002111> and select all statements below that are true. (note: most answers can be found in the Abstract and Introduction) \[ 1 point \].
+
+1.  the primary problem with multiply mapped reads is that you dont know where in the genome the reads actually map
+
+2.  discarding multiply mapped reads could introduce false negatives (failure to detect true peaks)
+
+3.  many multiply mapped reads map to segmental duplication regions
+
+4.  multiply mapped reads are not important because peaks should all be in non-repetitive parts of the genome
+
+5.  including multiply-mapped reads in moderate to highly mappable regions can improve peak identification
+```{bash}
+# answer: 2,3,5
+```
+
+
+##### You are finished, upload the answers in a .html, word, or pdf with naming convention \_homework_week11.html at the link provided for homework 11 in the "Assignments" section on the NYU Brightspace webpage.

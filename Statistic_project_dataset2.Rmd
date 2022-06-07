@@ -1,0 +1,198 @@
+---
+title: "Final project2"
+author: "Xiaoyan Wen"
+date: "12/11/2020"
+output: word_document
+---
+# Dataset 2:
+# a) Mnemiopsis_col_data.csv
+# b) Mnemiopsis_count_data.csv``
+
+```{r}
+rm(list = ls())
+graphics.off()
+```
+
+```{r}
+library(readr)
+library(dplyr)
+library(tibble)
+library(ggbiplot) # for pca plotting
+library(ggplot2)
+library(pls)   # for pcr analysis
+library(abind)
+library(nnet) # for multinom regression
+library(MASS) # for polr regression, stepwise regression
+library(DAAG) # for cross-validation
+library(dendextend)
+library(factoextra)
+library(cluster) # different methods of clustering
+library(purrr) # for map function
+library(caret) # split training and test set
+library(neuralnet)
+library(nnet)
+library(treeio)
+library(ggtree)
+library(pheatmap)
+library(DESeq2)
+
+
+
+# load data
+Mnemiopsis_count_data <- read_csv("Mnemiopsis_count_data.csv")
+mncount <- column_to_rownames(Mnemiopsis_count_data, var = "gene")
+rm(Mnemiopsis_count_data)
+```
+
+```{r}
+# drop rows that rowsum =< 10
+mncount$rowsum <- apply(mncount, 1, sum)
+mncount <- subset(mncount, rowsum > 10)
+mncount$rowsum <- NULL
+dim(mncount)
+```
+#1) Build hierarchical trees based on the columns and for the rows (exclude rows that are "low" expression)
+```{r}
+# data preparation
+# sampling for lambda calculation
+sam <- NULL
+for (c in 1:30){
+  mnc <- sample(as.matrix(mncount), size = 100)
+  sam <- append(sam, mnc)
+}
+opar <- par(mfrow = c(1, 2))
+hist(sam); qqnorm(sam)
+par(opar)
+shapiro.test(sam)
+```
+
+
+```{r}
+# define boxcox function
+bxcx <- function(x, lmbd){
+  if (abs(lmbd) < 0.05){
+    return(log(x))
+  }else{
+    return((x^lmbd - 1)/lmbd)
+  }
+}
+
+# for-loop to find lambda 
+x <- sam
+lam <- seq(-2, 2, 0.1)
+t <- list()
+v <- list()
+cnt = 0
+for (i in lam){
+  cnt <- cnt + 1
+  tt <- shapiro.test(bxcx(x,i))
+  t[cnt] <- tt$statistic
+  v[cnt] <- i
+}
+plot(v, t)
+abline(v = 0.2)
+```
+
+```{r}
+rm(sam)
+
+# boxcox transfer 
+mncount.bxcx <- bxcx(mncount, 0.2)
+summary(mncount.bxcx)
+```
+```{r}
+# test the distribution
+sam2 <- sample(as.matrix(mncount.bxcx), size = 3000)
+par(mfrow = c(1, 2))
+hist(sam2); qqnorm(sam2)
+
+shapiro.test(sam2)
+```
+
+```{r}
+rm(sam2)
+graphics.off()
+
+# === scale transformation
+mncount.t2 <- scale(mncount.bxcx, center = T, scale = T)
+mncount.t2 <- as.data.frame(mncount.t2)
+summary(mncount.t2)
+```
+
+```{r}
+# built hierarchical tree
+distmn2 <- dist(mncount.t2, method = "euclidean") 
+hmn2 <- hclust(distmn2, method = "complete")
+plot(hmn2, cex = 0.3, hang = -1)
+```
+
+# 2) Draw a heat map of the expression data
+```{r}
+rm(distmn2, hmn2)
+graphics.off()
+pheatmap(mncount.t2)
+```
+
+# 3) Use DESeq2 to analyze this data
+# a. Which are the most significantly changing genes in this dataset?
+```{r}
+rm(mncount, mncount.bxcx, mncount.t2)
+graphics.off()
+
+# load data
+countdata <- read.csv("Mnemiopsis_count_data.csv", header = TRUE, sep = ",")
+metadata <- read.csv("Mnemiopsis_col_data.csv", header = TRUE, sep = ",")
+head(countdata); head(metadata)
+```
+```{r}
+# construct DESEQ dataset object
+dds <- DESeqDataSetFromMatrix(countData = countdata,
+                              colData = metadata,
+                              design = ~condition,
+                              tidy = TRUE)
+dds
+```
+```{r}
+# run DESEQ function
+dds <- DESeq(dds)
+
+# results table
+res <- results(dds)
+head(results(dds, tidy = TRUE))
+```
+```{r}
+# sort summary list by p-value
+res <- res[order(res$padj),]
+head(res)
+```
+```{r}
+# plot counts
+par(mfrow = c(2,3))
+
+plotCounts(dds, gene = "ML087114a", intgroup = "condition")
+plotCounts(dds, gene = "ML20265a", intgroup = "condition")
+plotCounts(dds, gene = "ML463533a", intgroup = "condition")
+plotCounts(dds, gene = "ML085213a", intgroup = "condition")
+plotCounts(dds, gene = "ML01433a", intgroup = "condition")
+plotCounts(dds, gene = "ML01248a", intgroup = "condition")
+```
+
+# b. Which genes are most consistently highly expressed in these datasets that are the # "house-keeping" genes?
+```{r}
+res <- res[order(res$baseMean),]
+tail(res) 
+```
+```{r}
+# plot counts 
+par(mfrow = c(2,3))
+
+plotCounts(dds, gene = "ML04011a", intgroup = "condition")
+plotCounts(dds, gene = "ML00017a", intgroup = "condition")
+plotCounts(dds, gene = "ML020045a", intgroup = "condition")
+plotCounts(dds, gene = "ML46651a", intgroup = "condition")
+plotCounts(dds, gene = "ML26358a", intgroup = "condition")
+plotCounts(dds, gene = "ML20395a", intgroup = "condition") 
+```
+
+
+

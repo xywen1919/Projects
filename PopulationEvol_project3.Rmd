@@ -1,0 +1,455 @@
+---
+title: "R Notebook"
+output:
+  html_document:
+    df_print: paged
+---
+
+In this assignment, you will conduct a genome-wide association study (GWAS) of low density lipoprotein (LDL) and Triglycerides (extra credit) traits from the PennCATH study of Coronary Artery Disease using the Reed et al. (2015) workflow.
+
+The input files (including clinical phenotypes and SNP data for 1,401 samples), the GWAS_master.R script (introduced in Week 10 recitation), and accompanying files are available in the shared drive.
+
+Use the GWAS_master.R script (and accompanying scripts called in that script) to conduct the GWAS of the LDL trait. Please include all data cleaning steps to filter samples and/or SNPs based on the criteria defined in that script. 
+
+The GWAS_master.R script by default runs GWAS on the high density lipoprotein (HDL) data, but only on chromosomes 15, 16, 17. In your analysis, please conduct GWAS on SNPs from all 22 human autosomes (this takes ~ 1-2 hrs to run on most laptop computers). Accommodations will be made for anyone who has performance-related issues on their personal computers.
+
+The GWAS_master.R script by default runs GWAS on the high density lipoprotein (HDL) data, but only on chromosomes 15, 16, 17. In your analysis, please conduct GWAS on SNPs from all 22 human autosomes (this takes ~ 1-2 hrs to run on most laptop computers). Accommodations will be made for anyone who has performance-related issues on their personal computers.
+
+Note that you do not need to impute the genotype data and do not need to perform GWAS on any imputed data (i.e., you should skip steps 7 and 9 in GWAS_master.R). 
+
+For your report, please include the script you used to run the analysis, provide answers to the following questions, and include the required plots (mentioned below) in your report. You may wish to read the Reed et al. (2015) paper and refer to other course materials to assist you with answering the questions.
+
+```{r global}
+# data input and output directories set
+data.dir <- "./GWASTutorial_Files"
+out.dir <- "./GWAS_out"
+
+
+# Input files
+gwas.fn <- lapply(c(bed='bed', bim='bim',fam='fam',gds='gds'), 
+                  function(n) sprintf("%s/GWAStutorial.%s",data.dir,n))
+clinical.fn <- sprintf('%s/GWAStutorial_clinical.csv',data.dir)
+onethou.fn = lapply(c(info='info', ped='ped'),
+                    function(n) sprintf('./GWASTutorial_Files/chr16_1000g_CEU.%s', n))
+protein.coding.coord.fname <- sprintf('%s/ProCodgene_coords.csv', data.dir)
+
+
+# Output files
+gwaa.fname <- sprintf('%s/GWAStutorial.out.txt', out.dir)
+gwaa.unadj.fname <- sprintf("%s/GWAStutorialoutUnadj.txt", out.dir)
+impute.out.fname <- sprintf("%s/GWAStutorial_imputationOut.csv", out.dir)
+CETP.fname <- sprintf('%s/CETP_GWASout.csv', out.dir)
+```
+```{r step1-readData}
+library(snpStats)
+geno<- read.plink(gwas.fn$bed, gwas.fn$bim, gwas.fn$fam, na.strings=('-9'))
+
+# genotype SnpMatrix object
+genotype<- geno$genotype
+print(genotype)
+
+# SNP information table
+genoBim <- geno$map
+colnames(genoBim) <- c("chr",'SNP', 'gen.dist', 'position', 'A1', 'A2')
+print(head(genoBim))
+
+# remove raw file to open up memory
+rm(geno)
+
+# clinical data
+clinical <- read.csv(clinical.fn, colClasses = c('character','factor','factor',rep('numeric',4)))
+rownames(clinical)<-clinical$FamID
+print(head(clinical))
+
+# subset genotype with individuals having clinical infomation
+genotype<-genotype[clinical$FamID,]
+print(genotype)
+```
+```{r step2-SNP filtering with call& MAF}
+# Create SNP statistics
+snpsum.col <- col.summary(genotype)
+print(head(snpsum.col))
+
+# check dimension before filtering
+dim(genotype)
+dim(snpsum.col)
+
+# set thresholds for filtering
+call <- 0.95
+minor <- 0.01
+
+# filter on MAF and call rate
+use<- with(snpsum.col, (!is.na(MAF) & MAF>minor) & Call.rate >= call)
+use[is.na(use)]<- FALSE
+
+# subset genotype and snpsum.col 
+genotype <- genotype[,use]
+snpsum.col<- snpsum.col[use,]
+
+# check dimension after filtering
+dim(genotype)
+dim(snpsum.col)
+```
+
+```{r step3-sample level filtering with poor data quality}
+library(SNPRelate)
+library(plyr)
+
+# Create sample statistics
+snpsum.row <- row.summary(genotype)
+
+# reset memory size
+memory.limit(size=56000)
+
+# add the F stat (inbreeding coefficient) to snpsum.row
+MAF <- snpsum.col$MAF
+callmatrix <- !is.na(genotype)
+
+hetExp <- callmatrix %*% (2*MAF*(1-MAF))
+hetObs <- with(snpsum.row, Heterozygosity*(ncol(genotype))*Call.rate)
+snpsum.row$hetF <- 1-(hetObs/hetExp)
+head(snpsum.row)
+
+# check dimension before filtering
+dim(genotype)
+dim(snpsum.row)
+
+# setting thresholds for filtering
+sampcall <- 0.95  
+hetcutoff <- 0.1  
+
+# filter on call rate and inbreeding coefficient
+sampleuse <- with(snpsum.row, !is.na(Call.rate) & Call.rate >sampcall & abs(hetF)<= hetcutoff)
+sampleuse[is.na(sampleuse)] <- FALSE
+
+# subset genotype, snpsum.row and clinical data according to the filtering
+genotype <- genotype[sampleuse,]
+clinical <- clinical[rownames(genotype),]
+snpsum.row <- snpsum.row[sampleuse,]
+
+# check dimension after filtering
+dim(genotype)
+dim(snpsum.row)
+```
+```{r Step 4 - Filter SNPs by kinship and linkage}
+# set thresholds
+kin.thresh <- 0.1 #threshold for kinship
+ld.thresh <- 0.2 #threshold of linkage
+
+# Create gdsfile requires for SNPRelate functions
+snpgdsBED2GDS(gwas.fn$bed, gwas.fn$fam, gwas.fn$bim, gwas.fn$gds)
+genofile <- snpgdsOpen(gwas.fn$gds, readonly = FALSE)
+
+# cleanup gds data
+gds.ids <- read.gdsn(index.gdsn(genofile, 'sample.id'))
+gds.ids <- sub('-1', '', gds.ids)
+add.gdsn(genofile, 'sample.id', gds.ids, replace=TRUE)
+
+# Prune SNPs for IBD analysis
+set.seed(1000)
+geno.sample.ids <- rownames(genotype)
+snpSUB <- snpgdsLDpruning(genofile, ld.threshold = ld.thresh,
+                          sample.id = geno.sample.ids, #only analyze the filtered samples
+                          snp.id= colnames(genotype))  #only analyze the filtered SNPs
+snpset.ibd <- unlist(snpSUB, use.names = FALSE)
+
+
+# Find IBD coeffiencts using the Methods of Moments procedure. Include pairwise kinship
+ibd<- snpgdsIBDMoM(genofile, kinship = TRUE, sample.id = geno.sample.ids,
+                   snp.id = snpset.ibd, num.thread = 1)
+ibdcoeff <- snpgdsIBDSelection(ibd) #Pairwise sample comparison
+head(ibdcoeff)
+
+# Check if there are candidates for relatedness
+ibdcoeff <- ibdcoeff[ibdcoeff$kinship >= kin.thresh,]
+
+# iteratively remove samples with high kinship starting with sample with the most pairings
+related.samples <- NULL
+while(nrow(ibdcoeff)>0){
+  #count the number of occurrences of each and take the top one 
+  sample.counts <- arrange(count(c(ibdcoeff$ID1, ibdcoeff$ID2)), -freq)
+  rm.sample <- sample.counts[1,'x']
+  cat('Removing sample', as.character(rm.sample), 'too closely related to', sample.counts[1,'freq'], 'other samples. \n')
+  
+  #remove for ibdcoeff and and to list
+  ibdcoeff <- ibdcoeff[ibdcoeff$ID1 != rm.sample & idbcoeff$ID2 != rm.sample, ]
+  related.samples <- c(as.characer(rm.sample), related.samples)
+}
+
+# check dimension before filtering
+dim(genotype)
+dim(clinical)
+
+# filter genotype and clinical to include only unrelated samples
+genotype <- genotype[!(rownames(genotype) %in% related.samples),]
+clinical <- clinical[!(clinical$FamID %in% related.samples),]
+geno.sample.ids<- rownames(genotype)
+
+# check dimension after filtering
+dim(genotype)
+dim(clinical)
+
+print(genotype)
+
+
+# Check for ancestry
+# Find PCA matrix
+pca<- snpgdsPCA(genofile, sample.id = geno.sample.ids, snp.id = snpset.ibd, num.thread = 1)
+```
+
+```{r Step 5 - Hard-Weinberg SNP filtering}
+library(gdsfmt)
+
+# set HWE cut-off
+hardy<- 10^-6  
+
+# screen CAD controls to remove SNPs with HWE test statistic p value less than 1 × 10−6 
+CADcontrols<- clinical[clinical$CAD==0, 'FamID']
+snpsum.colCont <- col.summary(genotype[CADcontrols, ])
+
+HWEuse<- with(snpsum.colCont, !is.na(z.HWE)&(abs(z.HWE)<abs(qnorm(hardy/2))))
+HWEuse[is.na(HWEuse)]<- FALSE  
+
+# remove file to open up memory
+rm(snpsum.colCont)
+
+# check dimension before filtering
+dim(genotype)
+
+# subset genotype and SNP summary data for SNPs that pass HWE criteria
+genotype<- genotype[,HWEuse]
+
+# check dimension after filtering
+dim(genotype)
+```
+```{r Step 6 - Generating principal component for modeling population stratification}
+# Set LD threshold to 0.2
+ld.thresh<-0.2
+
+# Prune SNPs
+set.seed(1000)
+geno.sample.ids<- rownames(genotype)
+snpSUB<- snpgdsLDpruning(genofile, ld.threshold = ld.thresh,
+                         sample.id = geno.sample.ids, #Only analyze the filted samples
+                         snp.id = colnames(genotype)) #Only analyze the filtered SNPs
+
+snpset.pca<- unlist(snpSUB, use.names = FALSE)
+
+# Find PCA matrix
+pca<- snpgdsPCA(genofile, 
+                sample.id = geno.sample.ids, 
+                snp.id = snpset.pca, num.thread = 1)
+
+# Find and record first 10 principal components
+pcs<- data.frame(FamID=pca$sample.id, pca$eigenvect[,1:10],
+                 stringsAsFactors = FALSE)
+colnames(pcs)[2:11]<-paste('pc', 1:10, sep='')
+
+print(head(pcs))
+```
+
+```{r Step --ldl-- 8a - Association analysis of typed SNPs with LDL-cholesterol}
+library(doParallel)
+
+# GWAS of LDL with log10 transformed values (all 22 chromosomes)- phenotype data
+library(magrittr)
+
+phenoSub_ldl.df <- merge(clinical,pcs) %>%
+  dplyr::select(-c('hdl','tg','CAD')) %>%
+  dplyr::mutate(ldl = log(ldl)) %>%
+  dplyr::rename(phenotype = ldl) %>%
+  dplyr::rename(id = FamID) %>%
+  dplyr::filter(!is.na(phenotype)) %>%
+  as.data.frame
+
+print(phenoSub_ldl.df)
+
+# histogram of LDL before and after log transformation 
+par(mfrow=c(1,2))
+hist(clinical$ldl)
+hist(phenoSub_ldl.df$phenotype)
+
+# subset genotype SnpMatrix object to only include samples with LDL phenotype data - genotype data
+genotypeSub_ldl.SnpMatrix <- genotype[as.character(phenoSub_ldl.df$id),]
+# number of SNPs 
+nSNPs <- ncol(genotypeSub_ldl.SnpMatrix)
+print(nSNPs)
+```
+
+```{r step8b --ldl-- - GWAS analysis using parallel processing on all SNPs }
+library(plyr)
+library(parallel)
+source('./GWAA.R')
+
+#create text file for GWAA output
+columns<- c("SNP", 'Estimate', 'Std.Error','t-value','p-value')
+write.table(t(columns), 'GWAA_ldl.txt', row.names=FALSE, col.names = FALSE, quote=FALSE)
+
+# for parallel processing, SNPs are divided into 10 groups
+nSplits <- 10
+
+genosplit <- ceiling(nSNPs/nSplits) # number of SNPs in each subset
+snp.start <- seq(1, nSNPs, genosplit) # index of first SNP in group
+snp.stop <- pmin(snp.start+genosplit-1, nSNPs) # index of last SNP in group
+
+# GWAS analysis to map the LDL trait
+start<- Sys.time()
+GWAA(genotypeSub_ldl.SnpMatrix, phenoSub_ldl.df,filename='GWAA_ldl.txt') 
+end <- Sys.time()
+
+print(end-start)
+
+```
+
+```{r Step 10 --ldl-- - Data Integration}
+# Read in GWAS output that was produced by GWAA function
+GWASout <- read.table('GWAA_ldl.txt', header = TRUE, colClasses = c('character', rep('numeric',4)))
+
+# Find the -log_10 of the p-values
+GWASout$Neg_logP<- -log10(GWASout$p.value)
+
+#Merge output with genoBim by SNP name to add position and chromosome number
+GWASout <- merge(GWASout, genoBim[ ,c('SNP','chr', 'position')])
+
+#Order SNPs by significance
+GWASout <- arrange(GWASout, -Neg_logP)
+GWASout$type <- 'typed'
+print(head(GWASout))
+dim(GWASout)
+
+```
+
+
+```{r Step 11 --ldl-- - manhattan plot for GWAS findings}
+source("GWAS_ManhattanFunction.R")
+par=mfrow=c(1,1)
+
+#Create Manhattan Plot
+GWAS_Manhattan(GWASout)
+```
+
+```{r step 12--ldl-- - QQ-plot for observed P-value distribution}
+library(tidyverse)
+# observed p value into a tibble
+qq_pval.tbl_df <- tibble(obs_pvalue = GWASout$p.value) %>%
+  arrange(obs_pvalue)
+# calculate expected p val
+expected <- (1:length(qq_pval.tbl_df$obs_pvalue))/(length(qq_pval.tbl_df$obs_pvalue)+1)
+qq_pval.tbl_df <- qq_pval.tbl_df %>%
+                  mutate(exp_pvalue = expected)
+# QQ plot
+qqtest.tbl_df %>%
+  ggplot(aes(x = exp_pvalue, y = obs_pvalue)) +
+  geom_point()
+
+# lambda value for model outputs
+library(QQperm)
+lambda <- estlambda2(qq_pval.tbl_df$obs_pvalue, qq_pval.tbl_df$exp_pvalue,  plot=TRUE)
+cat(sprintf("P-value lambda: %s\n", lambda$estimate)) 
+
+```
+
+
+```{r --tg-- Step 8a - Association analysis of typed SNPs with TG-cholesterol}
+library(doParallel)
+
+# GWAS of TG with log10 transformed values (all 22 chromosomes)- phenotype data
+library(magrittr)
+
+phenoSub_tg.df <- merge(clinical,pcs) %>%
+  dplyr::select(-c('hdl','ldl','CAD')) %>%
+  dplyr::mutate(tg = log(tg)) %>%
+  dplyr::rename(phenotype = tg) %>%
+  dplyr::rename(id = FamID) %>%
+  dplyr::filter(!is.na(phenotype)) %>%
+  as.data.frame
+
+print(phenoSub_tg.df)
+
+# histogram of TG before and after log transformation 
+par(mfrow=c(1,2))
+hist(clinical$tg)
+hist(phenoSub_tg.df$phenotype)
+
+# subset genotype SnpMatrix object to only include samples with TG phenotype data - genotype data
+genotypeSub_tg.SnpMatrix <- genotype[as.character(phenoSub_tg.df$id),]
+# number of SNPs 
+nSNPs <- ncol(genotypeSub_tg.SnpMatrix)
+print(nSNPs)
+```
+
+
+```{r step8b --tg-- - GWAS analysis using parallel processing on all SNPs }
+library(plyr)
+library(parallel)
+source('./GWAA.R')
+
+#create text file for GWAA output
+columns<- c("SNP", 'Estimate', 'Std.Error','t-value','p-value')
+write.table(t(columns), 'GWAA_tg.txt', row.names=FALSE, col.names = FALSE, quote=FALSE)
+
+# for parallel processing, SNPs are divided into 10 groups
+nSplits <- 10
+
+genosplit <- ceiling(nSNPs/nSplits) # number of SNPs in each subset
+snp.start <- seq(1, nSNPs, genosplit) # index of first SNP in group
+snp.stop <- pmin(snp.start+genosplit-1, nSNPs) # index of last SNP in group
+
+# GWAS analysis to map the TG trait
+start<- Sys.time()
+GWAA(genotypeSub_tg.SnpMatrix, phenoSub_tg.df,filename='GWAA_tg.txt') 
+end <- Sys.time()
+
+print(end-start)
+
+```
+
+
+```{r Step 10 --tg-- - Data Integration}
+# Read in GWAS output that was produced by GWAA function
+GWASout <- read.table('GWAA_tg.txt', header = TRUE, colClasses = c('character', rep('numeric',4)))
+
+# Find the -log_10 of the p-values
+GWASout$Neg_logP<- -log10(GWASout$p.value)
+
+#Merge output with genoBim by SNP name to add position and chromosome number
+GWASout <- merge(GWASout, genoBim[ ,c('SNP','chr', 'position')])
+
+#Order SNPs by significance
+GWASout <- arrange(GWASout, -Neg_logP)
+GWASout$type <- 'typed'
+print(head(GWASout))
+dim(GWASout)
+
+```
+
+
+```{r Step 11 --tg-- - manhattan plot for GWAS findings}
+source("GWAS_ManhattanFunction.R")
+par=mfrow=c(1,1)
+
+#Create Manhattan Plot
+GWAS_Manhattan(GWASout)
+```
+
+```{r step 12--tg-- - QQ-plot for observed P-value distribution}
+library(tidyverse)
+# observed p value into a tibble
+qq_pval.tbl_df <- tibble(obs_pvalue = GWASout$p.value) %>%
+  arrange(obs_pvalue)
+
+# calculate expected p val
+expected <- (1:length(qq_pval.tbl_df$obs_pvalue))/(length(qq_pval.tbl_df$obs_pvalue)+1)
+qq_pval.tbl_df <- qq_pval.tbl_df %>%
+                  mutate(exp_pvalue = expected)
+# QQ plot
+qqtest.tbl_df %>%
+  ggplot(aes(x = exp_pvalue, y = obs_pvalue)) +
+  geom_point()
+
+# lambda value for model outputs
+library(QQperm)
+lambda <- estlambda2(qq_pval.tbl_df$obs_pvalue, qq_pval.tbl_df$exp_pvalue,  plot=TRUE)
+cat(sprintf("P-value lambda: %s\n", lambda$estimate)) 
+
+```

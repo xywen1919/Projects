@@ -1,0 +1,500 @@
+---
+title: "NGS.Project.XiaoyanWen"
+author: "Xiaoyan Wen"
+date: "5/6/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(message = FALSE, tidy = TRUE, warning = FALSE)
+```
+
+### NGS Analysis Spring 2022 Course Project (Option A)
+
+Differential gene expression (DGE) analysis with RNA-seq is an essential method in many areas of biology including experimental biomedicine. For your project, you will conduct a DGE analysis comparing gene expression in control breast cancer cell lines to treatment lines with a gene (NRDE2) that has been silenced with RNAi. The goal is to characterize differentially expressed genes that may be impacted by knocking down NRDE2.
+
+A synopsis of the experiment can be found here:
+
+<https://www.ebi.ac.uk/ena/data/view/PRJNA490376>
+
+#### A note on independent completion of the project
+
+This assignment should be completed by you and is intended to reflect your work. The assignment should not be completed in collaboration with other students in the course or anyone else.
+
+#### About the data
+
+The data include RNA-seq libraries from three biological replicates from control cell lines and three biological replicates in which the gene NRDE2 has been silenced with RNAi. The libraries were single-end (SE) sequenced on an Illumina NextSeq platform.
+
+To complete your project, you will need to process the raw data and conduct DGE with the Salmon + tximport + DESeq2 workflow introduced in the course in Week 10.
+
+Specifically, you should do the following:
+
+1.  Trim the fastqs with fastp using appropriate settings to automatically remove adapters from single end reads and polyG sequences introduced on NextSeq platforms (see Week 2)
+
+The following is a table on Greene with the samples and their fastq files:
+
+`/scratch/work/courses/BI7653/project.2022/project_fastqs.txt`
+
+The fastq files are located in:
+
+`/scratch/work/courses/BI7653/project.2022/fastqs`
+
+```{bash eval=FALSE}
+srun --time=24:00:00 --mem=46GB --pty /bin/bash
+
+# create folder for project
+cd $SCRATCH
+mkdir ngs.project
+cd ngs.project
+
+# find out read-length of the fastq 
+cp /scratch/work/courses/BI7653/project.2022/fastqs/SRR7819991.fastq.gz .
+gunzip SRR7819991.fastq.gz
+awk '{if(NR%4==2) {count++; bases += length} } END{print bases/count}' SRR7819991.fastq
+## 75
+```
+
+
+script for finalp_slurm_fastpTrimming.sh
+```{bash eval=FALSE}
+#!/bin/bash
+#
+#SBATCH --nodes=1
+#SBATCH --tasks-per-node=1
+#SBATCH --cpus-per-task=1
+#SBATCH --time=8:00:00
+#SBATCH --mem=4GB
+#SBATCH --job-name=fastp_array
+#SBATCH --mail-type=FAIL
+#SBATCH --mail-user=xw2470@nyu.edu
+#SBATCH --array=1-6
+
+#SBATCH --output=slurm_%j.out
+#SBATCH -o slurm.%N.%j.out # STDOUT
+#SBATCH -e slurm.%N.%j.err # STDERR
+
+module purge
+
+# Path to 2-column (tab-delimited) table with sample name, fastq file name
+table=/scratch/work/courses/BI7653/project.2022/project_fastqs.txt
+# Directory where fastqs are located
+fqdir=/scratch/work/courses/BI7653/project.2022/fastqs
+
+# Define sample, fq1 variables for current array index
+line="$(head -n $SLURM_ARRAY_TASK_ID $table | tail -n 1)"
+sample="$(printf "%s" "${line}" | cut -f1)"
+fq1="$(printf "%s" "${line}" | cut -f2)"
+
+# Print to standard out the array index and the sample name
+echo Processing array index: $SLURM_ARRAY_TASK_ID sample: $sample
+
+# Make a directory for the sample and cd to it
+mkdir "${sample}"
+cd "${sample}"
+
+# define output filenames
+fq1_fastp=$(basename $fq1 .fastq.gz).SE.fastq.gz
+
+# Load the fastp software module
+module load fastp/intel/0.20.1
+
+# Run fastp on sample fastqs - adapter trimming is enabled by default for SE data
+# note: discard read pairs where either read is < 35 bp after trimming
+# note: use "*fastp.json" extension to ensure compatibility with MultiQC 
+fastp -i $fqdir/$fq1 \
+-o $fq1_fastp \
+--length_required 35 \
+--n_base_limit 50 \
+--trim_poly_g \
+--html $sample.fastp.html \
+--json $sample.fastp.json
+
+# Print the exit status of the fastp command and the time the script ended to standard out
+echo _ESTATUS_ [ fastp for $sample ]: $?
+# Purge fastp and load fastqc module
+module purge
+
+module load fastqc/0.11.9
+# Run fastqc
+fastqc $fq1_fastp 
+echo _ESTATUS_ [ fastqc for $sample ]: $?
+
+echo _END_ [ fastp for $sample ]: $(date)
+
+```
+
+
+```{bash eval=FALSE}
+sbatch finalp_slurm_fastpTrimming.sh
+```
+
+
+2.  Run fastqc on the processed RNA-seq reads separately on each sample and generate a MultiQC report.
+Given the fastqc files from step 1, the following code is for MultiQC
+```{bash eval=FALSE}
+find $PWD -name \*fastqc.zip > fastqc_files.txt
+module load multiqc/1.9
+multiqc --file-list /scratch/xw2470/ngs.project/fastqc_files.txt
+```
+
+
+3.  Download the human reference transcriptome
+
+Navigate to the GRCh38 genome "Gene Annotation" section of the Ensembl website:
+
+<https://www.ensembl.org/Homo_sapiens/Info/Index>
+
+Then click on "Download Fasta"-\>"cdna/" and download the file "Homo_sapiens.GRCh38.cdna.all.fa.gz"
+
+note: if you would like to download directly to hpc, you can copy the link address and use wget.
+```{bash eval=FALSE}
+wget ftp://ftp.ensembl.org/pub/release-106/fasta/homo_sapiens/cdna/Homo_sapiens.GRCh38.cdna.all.fa.gz
+```
+
+
+4.  g-unzip the transcripts fasta and run Picard tools NormalizeFasta 
+
+script for finalp_slurm_picardNormalization.sh
+```{bash eval=FALSE}
+#!/bin/bash
+#
+#SBATCH --nodes=1
+#SBATCH --tasks-per-node=1
+#SBATCH --cpus-per-task=1
+#SBATCH --time=8:00:00
+#SBATCH --mem=16GB
+#SBATCH --job-name=PICARD_normalization
+#SBATCH --mail-type=FAIL
+#SBATCH --mail-user=xw2470@nyu.edu
+
+#SBATCH --output=slurm_%j.out
+#SBATCH -o slurm.%N.%j.out # STDOUT
+#SBATCH -e slurm.%N.%j.err # STDERR
+
+module purge
+
+echo script start: $(date)
+
+module load picard/2.23.8
+
+gunzip Homo_sapiens.GRCh38.cdna.all.fa.gz 
+
+java -jar $PICARD_JAR NormalizeFasta \
+-I Homo_sapiens.GRCh38.cdna.all.fa \
+-O Homo_sapiens.GRCh38.cdna.all.normalized.fa 
+
+echo script completed: $(date)
+
+```
+
+
+```{bash eval=FALSE}
+sbatch finalp_slurm_picardNormalization.sh
+```
+
+
+5.  Create a set of index files using Salmon
+
+<https://salmon.readthedocs.io/en/latest/salmon.html>
+
+a. Download BBMap and decompress. 
+This will create a folder named bbmap inside 'ngs.project' directory 
+```{bash eval=FALSE}
+wget http://refgenomes.databio.org/v3/assets/archive/2230c535660fb4774114bfa966a62f823fdb6d21acf138d4/salmon_partial_sa_index?tag=default
+tar -zxvf salmon_partial_sa_index?tag=default
+```
+
+
+b. Shuffle the transcript order in the transcript fasta using bbmap.shuffle.sh script
+finalp_slurm_bbmapShuffle.sh
+```{bash eval=FALSE}
+#!/bin/bash
+#
+#SBATCH --nodes=1
+#SBATCH --tasks-per-node=1
+#SBATCH --cpus-per-task=1
+#SBATCH --time=8:00:00
+#SBATCH --mem=44GB
+#SBATCH --job-name=fastp_array
+#SBATCH --mail-type=FAIL
+#SBATCH --mail-user=xw2470@nyu.edu
+
+#SBATCH --output=slurm_%j.out
+#SBATCH -o slurm.%N.%j.out # STDOUT
+#SBATCH -e slurm.%N.%j.err # STDERR
+
+module purge
+
+echo script start: $(date)
+
+module load jdk/11.0.9
+bbmap/shuffle.sh in=Homo_sapiens.GRCh38.cdna.all.normalized.fa \
+out=Homo_sapiens.GRCh38.cdna.all.shuffled_normalized.fa
+
+echo script complete: $(date)
+```
+
+
+c. download human genome & prepare metadata by creating decoys.txt
+
+```{bash eval=FALSE}
+wget ftp://ftp.ncbi.nlm.nih.gov/refseq/H_sapiens/annotation/GRCh38_latest/refseq_identifiers/GRCh38_latest_genomic.fna.gz
+
+grep "^>" <(gunzip -c GRCh38_latest_genomic.fna.gz) | cut -d " " -f 1 > decoys.txt
+sed -i.bak -e 's/>//g' decoys.txt
+```
+
+
+d. concatenated the shuffled_normalized transcriptome and  human genome reference file to make a gentrome 
+
+```{bash eval=FALSE}
+gzip Homo_sapiens.GRCh38.cdna.all.shuffled_normalized.fa
+cat Homo_sapiens.GRCh38.cdna.all.shuffled_normalized.fa.gz  GRCh38_latest_genomic.fna.gz > gentrome.fa.gz
+```
+
+
+finalp_slurm_salmonIndex.sh
+```{bash eval=FALSE}
+#!/bin/bash
+#
+#SBATCH --nodes=1
+#SBATCH --tasks-per-node=1
+#SBATCH --cpus-per-task=1
+#SBATCH --time=8:00:00
+#SBATCH --mem=44GB
+#SBATCH --job-name=salmon_index
+#SBATCH --mail-type=FAIL
+#SBATCH --mail-user=xw2470@nyu.edu
+
+#SBATCH --output=slurm_%j.out
+#SBATCH -o slurm.%N.%j.out # STDOUT
+#SBATCH -e slurm.%N.%j.err # STDERR
+
+module purge
+
+echo script start: $(date)
+
+module load salmon/1.4.0
+salmon index -t gentrome.fa.gz -d decoys.txt -i human_transcripts_index --gencode 
+
+echo script completed: $(data)
+```
+
+
+
+6.  Run Salmon in mapping-based mode using a command appropriate for single-end data
+
+<https://salmon.readthedocs.io/en/latest/salmon.html>
+
+a. create a `project_fastqs_se.txt` table with 1st column sample, 2nd column trimmed-fastq filenames
+![](trimmed_fastqs.png)
+
+
+script for finalp_slurm_salmonSudoAlign.sh
+```{bash eval=FALSE}
+#!/bin/bash
+#
+#SBATCH --nodes=1
+#SBATCH --tasks-per-node=1
+#SBATCH --cpus-per-task=1
+#SBATCH --time=24:00:00
+#SBATCH --mem=44GB
+#SBATCH --job-name=salmon_sudoalign
+#SBATCH --mail-type=FAIL
+#SBATCH --mail-user=xw2470@nyu.edu
+#SBATCH --array=1-6
+
+module purge
+
+table=/scratch/xw2470/ngs.project/project_fastqs_se.txt
+line="$(head -n ${SLURM_ARRAY_TASK_ID} "${table}" | tail -n 1)"
+sample="$(printf "%s" "${line}" | cut -f1)"
+fq="$(printf "%s" "${line}" | cut -f2)"
+
+echo Processing array index: $SLURM_ARRAY_TASK_ID sample: $sample
+cd "${sample}"
+
+module load salmon/1.4.0
+
+salmon quant -i /scratch/xw2470/ngs.project/human_transcripts_index \
+-l A \
+-r $fq \
+--validateMappings \
+--gcBias \
+--threads ${SLURM_CPUS_PER_TASK} \
+-o $sample.transcripts_quant
+
+
+echo _ESTATUS_ [ salmon quant $sample ]: $?
+echo _END_ [ salmon slurm ]: $(date)
+
+```
+
+
+7.  Convert Salmon TPMs to gene-level counts with tximport and conduct DGE with DESeq2.
+
+tximport requires a mapping file that maps transcript ids to genes which must be converted to imported as a data.frame ("tx2gene" in the DESeq2 vignette). This file is provided to you as a comma-delimited file:
+
+`/scratch/work/courses/BI7653/project.2021/tx2gene.csv`
+
+```{r}
+library(tximport)
+sample_names <- c('control1','control2','control3','treated1','treated2','treated3')
+sample_condition <- c(rep('Control',3),rep('Treated',3))
+
+files <- file.path("/mnt/c/Users/wen_x/Downloads/NGS/project",
+                   paste(sample_names,"quant.sf",sep="_"))
+names(files) <- sample_names
+```
+
+
+```{r}
+# import quant.sf to txi
+tx2gene <- read.table("tx2gene.csv",header=F,sep=",")
+txi <- tximport(files, type="salmon", tx2gene=tx2gene)
+```
+
+```{r}
+# create meta table
+samples <- data.frame(sample_names=sample_names,condition=sample_condition)
+row.names(samples) <- sample_names
+samples
+```
+
+```{r}
+# build the DESeqDataSet object
+library(DESeq2)
+ddsTxi <- DESeqDataSetFromTximport(txi, colData = samples, design = ~ condition)
+ddsTxi
+```
+
+```{r}
+# remove gene with fewer than 10 counts
+keep <- rowSums(counts(ddsTxi)) >= 10
+ddsTxi <- ddsTxi[keep,]
+ddsTxi
+```
+
+
+```{r}
+# Execute the DESeq wrapper function
+ddsTxi <- DESeq(ddsTxi)
+ddsTxi
+```
+
+```{r}
+resultsNames(ddsTxi)
+```
+
+
+```{r}
+# DESeqReslut
+res <- lfcShrink(ddsTxi, contrast=c('condition', 'Treated', 'Control'), type = "ashr")
+```
+
+```{r}
+# ordered by adjusted p value
+res <- res[order(res$padj),]
+# write to .csv table
+write.csv(as.data.frame(res[order(res$padj),] ), file="treated_vs_control_DGE.csv")
+
+
+# Top 10 most significantly differentiated genes according to adjusted p value
+head(res,10)
+# write to .csv table
+write.csv(as.data.frame(head(res,10)), file = "Top 10 DGE genes.csv")
+```
+
+```{r}
+# MA plot
+plotMA(res, main="Shrinkage of LFCs")
+dev.copy(png,"MA plot.png")
+dev.off()
+```
+
+```{r}
+#PCA plot
+plotPCA(rlog(ddsTxi))
+dev.copy(png,"PCA plot.png")
+dev.off()
+```
+
+
+
+```{r}
+# histogram of raw p-value
+library(ggplot2)
+ggplot(as.data.frame(res),aes(pvalue)) + geom_histogram(fill="light blue",color='black')
+dev.copy(png,"Histogram of p value.png")
+dev.off()
+```
+
+```{r}
+# summary of differential gene expression with adjusted p value cut-off at 0.1,
+summary(res)
+
+```
+```{r}
+# number of genes that significantly differentiated between groups (treated vs control) based on adjusted P value
+sum(res$padj < 0.1, na.rm=TRUE)
+
+```
+```{r}
+# number of genes that significantly differentiated based on adjPvalue<0.1 and fold change > 2
+sum(res$padj < 0.1 & res$log2FoldChange > 1, na.rm=TRUE)
+```
+
+```{r}
+# dispersion by mean 
+dds <- DESeqDataSetFromTximport(txi,colData = samples, design = ~ condition)
+keep <- rowSums(counts(dds)) >= 10
+dds <- dds[keep,]
+dds
+```
+
+```{r}
+dds_mean <- estimateSizeFactors(dds)
+dds_mean <- estimateDispersions(dds_mean,fitType='mean')
+
+plotDispEsts(dds_mean)
+dev.copy(png,"Dispersion-by-mean plot.png")
+dev.off()
+```
+
+
+```{r}
+library(EnhancedVolcano)
+EnhancedVolcano(res, x = 'log2FoldChange', y = 'padj',
+                lab=rownames(res),
+                title = "Volcano plot - NRDE2 siRNA knockout vs control",
+                subtitle = bquote(italic('FDR <= 0.01 and absolute FC >= 2')),
+                labSize = 3, pointSize = 1.5, axisLabSize=10, titleLabSize=12,
+                subtitleLabSize=8, captionLabSize=10,
+                legendPosition = "none",
+                pCutoff = 0.01, FCcutoff = 2)
+dev.copy(png, "Volcano plot.png")
+dev.off()
+```
+
+
+#### Completing your assignment
+
+Your final report should include a short introduction (1 paragraph about DGE and the cancer cell line dataset), a materials and methods section, a results section, and a brief discussion.
+
+Items (a-c), and (f) below should be provided as a gzipped tar file.
+
+1.  Provide all scripts and/or command lines you executed in completing your assignment
+
+2.  Provide the MultiQC report in html format
+
+3.  Provide the Salmon output file with TPMs for each of the 6 samples
+
+4.  Write a detailed methods section. This should include how you trimmed the reads, anything unusual in the multiqc report, the library type (stranded or unstranded?, can be inferred by Salmon), a description of the workflow, whether you are reporting "shrunken" log fold-change estimates (or not), the statistical approach used including the multiple-test correction method.
+
+5.  Include in your results section a table with the total number of reads and the mapping rate for each sample, the number of statistically significant genes at your chosen FDR, the number of biologically relevant differentially expressed genes (defined using some criterion, such as a change in gene expression of two-fold or greater), a table with the 10 most highly significant differentially expressed genes, a sample PCA, an MA plot, and dispersion-by-mean plot, and a raw p-value histogram. Please also include any relevant comments about the figures.
+
+6.  Include the DESeq2 results for ALL Genes as a tab-delimited file.
+
+7.  Your report should be clear and concise with unambiguos descriptions of results and methods.
+
+##### You are finished, upload your report and the \*.tar.gz file and include your name in both files. You can upload your files at the "Assignments" section on the NYU Brightspace webpage.

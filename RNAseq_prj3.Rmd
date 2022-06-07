@@ -1,0 +1,235 @@
+---
+title: "RNAseqHW"
+author: "Manpreet S. Katari"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, error=TRUE)
+```
+
+### Data source
+
+The data was downloaded from NCBI GEO ([GSE124548](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE124548)). The study looks at the affect of a drug (Lumacaftor/Ivacaftor) to treat cystic fibrosis ( CF ). This drug has been approved for individuals that are homozygous for CFTR ( Cystic fibrosis transmembrane conductance regulator ) mutation. Clinical studies have observed that there is a large variation in the response thus the researchers are looking at RNA expressions to help identify the cause of this variation. Blood samples were taken from : 
+- 20 healthy patients ( do not have CF )
+- 20 patients that CF ( before treatment )
+- 20 patients that have CF ( after treatment - these are paired with those before treatment)
+
+I have extracted the raw read counts from the original matrix and provided it with the homework. The healthy patients have "HC" in their names, CF patients before treatment are labeled "Base" and after treatment are labeled "V2".
+
+For the homework we will compare the HC with Base to do a simple unpaired differentially expression.
+
+### Step 1 (5pts)
+
+Load the file **GSE124548.raw.txt** and create a new dataframe with just the columns with the raw counts for healthy (HC) and CF patients before treatment (Base) and call it **readcount**. Use the *third* column (EntrezID) in the original file as the rownames of readcount.
+
+```{r readdata}
+# load the data
+GSE124548.raw.fixed <- read.delim("C:/Users/wen_x/Downloads/trantomicsData/hw3/GSE124548.raw.fixed.txt")
+names(GSE124548.raw.fixed)# check the input
+dim(GSE124548.raw.fixed)
+
+# grep the col_index for HC and Base and extract from the raw
+col_hc <- grep("HC", names(GSE124548.raw.fixed))
+col_base <- grep("Base", names(GSE124548.raw.fixed))
+readcount <- GSE124548.raw.fixed[ ,c(col_hc, col_base)]
+rownames(readcount) <- GSE124548.raw.fixed$EntrezID # add EntrezID as rownames
+colnames(readcount)
+head(rownames(readcount))
+dim(readcount)
+```
+
+
+### Step 2 (5pts)
+
+Create a dataframe, called **expgroup**, with one column, labeled **condition**, that correctly assigns which column is healthy and which is CF. Use the column names of readcount as rownames of expgroup.
+
+```{r createfactor}
+# creat dataframe with one column "condition"
+expgroup <- data.frame(condition = factor(rep(c("Healthy", "CF"), each=20)))
+rownames(expgroup) <- colnames(readcount) # take colnames of readcount as rownames
+head(expgroup)
+```
+
+### Step 3 (5pts)
+
+Load the Deseq2 package ( install if necessary ) and create a Counts Dataset Matrix using the command **DESeqDataSetFromMatrix()** and call it **cds**.
+
+```{r runDESeq2} 
+library(DESeq2)
+
+#create a count matrix
+cds <- DESeqDataSetFromMatrix(readcount, 
+                              colData = expgroup, 
+                              design = ~ condition)
+
+```
+
+### Step 4 (5pts)
+
+Use the functions **estimateSizeFactors** and **estimateDispersions** so that Deseq2 can correct for size of library and estimates the dispersion. Plot the dispersion using **plotDispEsts**. What does the graph tell you?
+
+
+
+```{r estimate}
+# Use the functions **estimateSizeFactors** and **estimateDispersions** 
+cds <- estimateSizeFactors(cds)
+cds <- estimateDispersions(cds)
+plotDispEsts(cds) # plot the dispersion, it shows within-group variability between replicates is centered around trend
+```
+
+### Step 5 (5pts)
+
+Perform the Differential expression and obtain the results using **DESeq** and **results** functions.
+
+
+```{r deseqres}
+# perform the differential expression
+cds <- DESeq(cds)
+res <- results(cds)
+head(res)
+
+```
+
+### Step 6 (5pts)
+
+How many genes have an adjusted p-value of less than 0.05 and log2FoldChange greater than 1 or less than -1 ? Save this list of genes as **diffexpgenes**
+
+```{r diffexp}
+# count significant genes that fit the criteria
+diffexpgenes <- rownames(res[which((res$padj < 0.05)&(abs(res$log2FoldChange) > 1)),])
+length(diffexpgenes)
+
+```
+
+
+### Step 7 (5pts)
+
+Get the normalized values of the counts data in cds using the counts() function with
+option normalized=T and call this normvalues.
+
+```{r normvalues}
+normvalues <- counts(cds, normalized=T)
+dim(normvalues)
+
+```
+
+### Step 8 (5pts)
+
+Create a new matrix or dataframe that contains the expression values from normvalues for just
+the diffexpgenes and call it diffexpvalues.
+
+```{r diffvalues}
+# extract significant genes from the normvalues dataset
+diffexpvalues <- as.data.frame(normvalues[which(rownames(normvalues)%in%diffexpgenes),])
+dim(diffexpvalues)
+
+```
+
+### Step 9 (10pts)
+
+Cluster the differentially expressed genes using hierarchical clustering and use the cutree
+function to create 8 groups. How many genes are in each group?
+
+```{r diffgroups}
+# cluster the genes
+library(dendextend)
+difgene_cor <- cor(t(diffexpvalues), method = "pearson")
+difgene_dist <- as.dist(1 - difgene_cor)
+difgene_clust <- hclust(difgene_dist, method = "complete")
+plot(as.dendrogram(difgene_clust), leaflab = "none")
+
+# create 8 groups
+difgene_clustGrouped <- cutree(difgene_clust, k = 8)
+table(difgene_clustGrouped) # number per groups
+```
+
+### Step 10 (10pts)
+
+Create a heatmap of all the genes using the **pheatmap** package. Some options you should pay attention to are:
+- scale ( scaling gene values shows expression pattern changes rather than magnitude)
+- cluster_rows ( define how the rows should be clustered)
+- annotation_col ( color code the different samples based on a category- health or cf)
+- annotation_row ( color code the different genes based on the cluster they belong to)
+
+```{r heatmap}
+library(pheatmap)
+# method 1 - compute z_score
+# function for z score
+cal_z_score <- function(x){
+  (x - mean(x)) / sd(x)
+}
+# scaling the genes
+diffexp_z_value <- t(apply(diffexpvalues, 1, cal_z_score))
+
+# create heatmap
+pheatmap(diffexp_z_value, 
+         cluster_rows = F,
+         # fontsize_row = 3,
+         # fontsize_col = 3,
+         annotation_row = as.data.frame(difgene_clustGrouped),
+         annotation_col = expgroup, 
+         annotation_names_row = F,
+         annotation_names_col = F,
+         show_rownames = F, 
+         show_colnames = F
+         )
+```
+```{r}
+# method 2 - define "clustering_distance_rows" argument as "correlation" .
+pheatmap(diffexpvalues, 
+         scale = "row", 
+         clustering_distance_rows = "correlation",
+         cluster_rows = T,
+         # fontsize_row = 3,
+         # fontsize_col = 3,
+         annotation_row = as.data.frame(difgene_clustGrouped),
+         annotation_col = expgroup, 
+         annotation_names_row = F,
+         annotation_names_col = F, 
+         show_rownames = F, 
+         show_colnames = F)
+```
+### Step 11 (10pts)
+
+Use the GOstats package to determing which GO-terms are enriched in **diffexpgenes**. To do this you will need to install the following packages from Bioconductor:
+
+```{r eval=F}
+# BiocManager::install("GOstats")
+# BiocManager::install("GO.db")
+# BiocManager::install("Category")
+# BiocManager::install("org.Hs.eg.db")
+```
+
+
+```{r loadlibraries}
+library(GOstats)
+library(GO.db)
+library(Category)
+library(org.Hs.eg.db)
+```
+
+Now create a new **GOHyperGParams** object using the **new()** function and save it as variable called **params**. The **geneIds** is **diffexpgenes**. These should be the EntrezIDs we made into rownames in the beginning. The **universeGeneIds** is the rownames of **readcount**. The annotation is **org.Hs.eg** and the ontology we are going to use is **BP** with a pvaluecutoff of 0.001 and our testDirection is **over**.
+
+```{r gostats}
+# create a new **GOHyperGParams** object
+params <- new("GOHyperGParams",
+              geneIds = diffexpgenes,
+              universeGeneIds = rownames(readcount),
+              annotation = "org.Hs.eg", 
+              ontology = "BP",
+              pvalueCutoff = 0.001,
+              testDirection = "over"
+              )
+overRepresented = hyperGTest(params)
+summary(overRepresented)
+```
+
+### Step 12 (5pts)
+
+What conclusions can you make about your analysis?
+
+```
+From the differential expressed gene Go-term analysis, we can see that abnormal leukocyte immune response and activation, inflammatory response to external biotic stimulus, regulation of complement activation are highly associated with cystic fibrosis. 
+
+```

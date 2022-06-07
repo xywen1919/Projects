@@ -1,0 +1,119 @@
+---
+title: "Evolutionary Biology and Population Genetics Assignment 4"
+author: "Jonathan Flowers"
+date: "12/4/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+### Evolutionary Biology and Population Genetics Assignment 4
+
+Genomewide scans encompass a set of methods to identify signatures of selection in population genomic
+data. A common approach to detecting selection is to identify patterns of linkage disequilibrium characteristic of selective sweeps (or partial sweeps). Extended haplotype homozygosity (EHH) and related
+statistics are one such approach. Here, you will use the rehh package to look for the signature of selection
+in the 1000 Genomes Project Data.
+
+
+### About the data
+
+The data come from the 1000 Genomes Project Pilot data and consist of phased VCF files from chromosome 1 and 2. The VCF files include Utah residents (CEPH) with Northern and Western European ancestry, a combined Han Chinese (CHB) and Japanese (JPT) population, and West African population (Yorubans, YRI).
+
+The data were obtained from here:
+
+http://ftp.1000genomes.ebi.ac.uk/vol1/ftp/pilot_data/paper_data_sets/a_map_of_human_variation/low_coverage/snps/
+
+The VCF files were subsetted to include only the indicated chromosomes, to include only SNPs with rs identifiers, include an AA tag in the INFO column of the VCF, and to contain only upper case ancestral
+alleles.
+
+### Completing your assignment
+
+On the NYU Brightspace website, you will find an entry for Assignment 4 in the Assignment section. Please upload your completed assignment at the provided link. 
+
+Please include your name in the filenames and inside the file of any uploads to Brightspace.
+
+### General instructions for completing your assignment
+
+You need to have installed CRAN packages tidyverse and rehh. Both can be installed with the familiar
+install.packages("") syntax from your RStudio console. You then need to download CEU_chr2_rs_only.vcf,
+CEU_chr1_rs_only.vcf, and CHBJPT_chr1_rs_only.vcf from:
+
+https://drive.google.com/drive/folders/1MXksMhCP-klCkcK5fGgGRldlWrfzo8gt?usp=sharing
+
+
+### Task 1: Extendended haplotype homozygosity (EHH) at lactase persistence locus
+
+A classic example of selection in the human genome is positive selection at the lactase persistence −13910C>T locus (rs4988235) on chromosome 2 in Europe. The derived T allele causes lactase expression in the intestine to persist into adulthood and confers lactose tolerance in carriers and homozygotes for the allele. 
+
+In this task, you will generate an EHH decay diagram for the derived and ancestral alleles in the CEU and perform an analysis of the Integrated Haplotype Score to determine how unusual the pattern observed is.
+
+Q1.1. Using the input file "CEU_chr2_rs_only.vcf" supplementary script rehh_v2.R to assist you, generate an EHH decay diagram for the SNP rs4988235. Include the plot in your report (6 points).
+
+Q1.2. Select the single best answer, based on your EHH decay diagram (2 points)
+
+(a) Extended haplotype homozygosity is greater around the ancestral allele than the derived allele
+(b) Extended haplotype homozygosity is greater around the derived allele than the derived allele 
+(c) It is impossible to tell which has greater extended haplotype homozygosity without comparing to another population
+
+Q1.3. Again using the rehh_v2.R code, calculate the Integrated Haplotype Score (iHS) for all SNPs on chromosome 2 in the CEU. Generate a Manhattan plot of iHS values and include the plot in your report (3 points) (6 points).
+
+Q1.4. The formula for unstandardized iHS differs between the equation in Hahn (equation 8.15, p. 198 - which was also presented in lecture slides) and that calculated in rehh. That is, in rehh, the unstadardized iHS has iHH for derived alleles in the denominator, while iHH for ancestral alleles is in the numerator. This flips the sign at loci with long range haplotypes associated with derived alleles when calculated by iHS  (equation 8.16, p. 199). Do we expect selective sweeps (or partial sweeps) to be reflected as positive or negative iHS values as calculate by the rehh package? (3 points).
+
+Q1.5. What is the iHS value for rs4988235 lactase persistence allele? (2 points)
+
+Q1.6a. The statistical significance of genomewide scans for selection (such as iHS) is a thorny issue in population genomics. Is the iHS value at rs4988235 statistically "significant"? The rehh package reports a p-value, but this is based on dubious assumptions (See rehh package documentation). So let's ignore it. Alternatively, it's common to remain agnostic to the actual p-value, and instead report how unusual the observed iHS value is relative to other values in the genome.
+
+Generate a histogram showing the "empirical distribution" of iHS values and draw a vertical line on the 
+plot indicating the iHS value for rs4988235. Consider modifying the number of bins from the default to provide a more granular visualization (more bins!). If you are using hist() see ?abline or geom_histogram see ?geom_vline. (5 points)
+
+Q1.6b. Perhaps the simplest approach to quantify how unusual an observed value is is to calculate the proportion of values more extreme in the genome than the value at rs4988235. For example, if you chose negative in Q1.4, then you would calculate the proportion less than rs4988235 or if you chose positive you would calculate the proportion greater. What is the proportion of values with more extreme values on chromosome 2 than the observed iHS at rs4988235? Use the code below to assist in exclude NA (missing) iHS values from your calculation (4 points)
+
+```{r echo=TRUE, eval=FALSE}
+# note: you need to replace the "<replace>" below
+library(tidyverse)
+<replace>[['ihs']] %>% # replace with your .list object returned by ihh2ihs function
+  rownames_to_column(var="id") %>%
+  filter(!is.na(IHS)) %>%
+  filter(IHS <replace>) %>% # replace with less than (<) or greater than (>) and the observed iHS value
+  summarise(numrows = n())
+```
+
+Q1.7 The rs4988235 lactase persistence allele is only one of a number of SNPs in the LCT region
+that show extended haplotype homozygosity. In fact there are multiple SNPs with more extreme values within
+100 kb on either side of the functional SNP.
+
+```{r echo=TRUE, eval=FALSE}
+# note: you need to replace the "<replace>" below with the correct expression from Q1.6 
+ceu_chr2.ihs.list[['ihs']] %>%
+  rownames_to_column(var="id") %>%
+  filter(IHS <replace>) %>%
+  filter(POSITION > 136225116) %>%
+  filter(POSITION < 136425116) %>%
+  as_tibble()
+```
+
+Provide an explanation why these values are even more extreme than the SNP at rs4988235 (4 points)
+
+### Task 2: Signatures of selection at the Duffy antigen locus
+
+Duffy antigen receptor for chemokines (DARC) also known as ACKR1 (atypical chemokine receptor 1), is often cited as quintessential example of selection in the human genome. The DARC locus encodes a membrane-bound chemokine receptor crucial for the infection of red blood cells by Plasmodium vivax, a major causative agent of malaria. A null allele FY\*O is found at near 100% frequency in equatorial Africa (but very low frequency elsewhere and is likely increases resistance to vivax malaria in equatorial Africa. Alleles FY\*A and FY\*B are at high frequency elsewhere but are also differentiated between regional populations including European and Asian populations. 
+
+Does FY\*B and FY\*A show evidence of selection in the genome? Your task is to use EHH and iHS to assess the functional SNP differentiating these two alleles and answer if you think there is evidence of selection in the CEU and CHB/JPT (Asian) populations.
+
+The input files for Task 2 are:
+CEU_chr1_rs_only.vcf
+CHBJPT_chr1_rs_only.vcf
+
+The functional SNP that distinguishes FY\*A and FY\*B alleles at the Duffy antigen locus is rs12075 at chromosome 1 position 157441978 in the 1000 Genomes pilot data. The derived allele, FY\*A, is determined by a Guanine change at this position which introduce a nonsynonymous D42G in the translated protein.
+
+Q2.1. Generate EHH decay diagrams for the SNP at chromosome 1 position 157441978 in both CEU and CHBJPT datasets. (6 points)
+
+Q2.2. Generate a Manhattan plot for iHS in both populations (6 points)
+
+Q2.3. Use the approach in Q1.6b to assess how unusual the haplotype structure is at this SNP with respect to other SNPs on chromosome 1. Report your code and the proportion of values with more extreme long range haplotypes associated with the derived allele in both CEU and CHB/JPT (3 points)
+
+Q1.4. Based on your results from Q2.1-2.3, do you see a signature of positive selection in the FY*A allele? Why or why not? (3 points)
+
+### You are finished. Please upload your answers answers and any figures to the Brightspace page for the course.
