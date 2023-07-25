@@ -1,9 +1,6 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-# In[3]:
-
-
 # import packages
 from Bio import Entrez, SeqIO
 from Bio.Blast import NCBIXML, NCBIWWW
@@ -28,9 +25,6 @@ import random
 
 # # Define functions
 
-# In[4]:
-
-
 # define working environment
 file_path = "/Users/wen_x/Downloads/BioData/FinalProject"
 if not os.path.exists(file_path):  # create a project directory folder
@@ -44,9 +38,6 @@ Entrez.email = my_email
 k = KEGG(verbose=False)
 
 
-# In[3]:
-
-
 # define function to fetch disease entry number given disease name
 def get_diseaseEntryNumber(diseaseName):
     """
@@ -56,9 +47,6 @@ def get_diseaseEntryNumber(diseaseName):
     diseaseEntry = k.find(database='disease', query=diseaseName).split('\t')[0]
     entry_number = diseaseEntry.split(':')[1]
     return entry_number
-
-
-# In[4]:
 
 
 # function to write annotation from entry number to local folder 
@@ -72,9 +60,6 @@ def get_annotation(entry_number):
     if not os.path.isfile(target_fileName):  # create file if not exists
         open(target_fileName, 'w').write(k.get(entry_number))  # write to file
         print("The annotation of %s is saved." % entry_number)  # print message
-
-
-# In[5]:
 
 
 # function to fetch pathway ID from disease entry number
@@ -92,9 +77,6 @@ def get_pathwayID(disease_entry_number):
         pathwayID = re.findall(pattern, f.read())
     # return value
     return pathwayID
-
-
-# In[6]:
 
 
 # function to write the pathway_map file to local folder 
@@ -117,9 +99,6 @@ def draw_kegg_map(disease_entry_number):
             print("Pathway map of %s_%s has been saved." % (disease_entry_number, pathway_id))
 
 
-# In[7]:
-
-
 # function to fetch the network ID from disease entry ID
 def get_networkID(disease_entry_number):
     """
@@ -137,9 +116,6 @@ def get_networkID(disease_entry_number):
     return networkID
 
 
-# In[8]:
-
-
 # function to write the annotation of networks to local folder 
 def get_networkAnnotation(disease_entry_number):
     """
@@ -152,9 +128,6 @@ def get_networkAnnotation(disease_entry_number):
         if not os.path.isfile(target_fileName):  # create file if not exists
             open(target_fileName, 'w').write(k.get(network_entry))  # write to file
             print("The annotation of %s is saved." % network_entry)  # print message
-
-
-# In[9]:
 
 
 # function to fetch element ID from disease entry number
@@ -187,9 +160,6 @@ def get_elementID(disease_entry_number):
     return elementID
 
 
-# In[10]:
-
-
 # function to write list of geneIDs to local folder 
 def get_geneID(disease_entry_number):
     """
@@ -214,9 +184,6 @@ def get_geneID(disease_entry_number):
     return geneID
 
 
-# In[11]:
-
-
 # function to fetch metabolite id 
 def get_metaboliteID(disease_entry_number):
     """
@@ -233,9 +200,6 @@ def get_metaboliteID(disease_entry_number):
         metabolite_id.extend(re.findall(pattern, k.get(i)))
     metaboliteID = list(dict.fromkeys(metabolite_id))  # remove duplicates
     return metaboliteID
-
-
-# In[12]:
 
 
 # function to fetch perturbant id 
@@ -256,9 +220,6 @@ def get_perturbantID(disease_entry_number):
     return perturbantID
 
 
-# In[14]:
-
-
 # Function to fetch pubmed id 
 def get_pubmedID(disease_entry_number):
    """
@@ -277,9 +238,6 @@ def get_pubmedID(disease_entry_number):
        pubmed_id.extend(re.findall(pattern, k.get(i)))
    pubmedID = list(dict.fromkeys(pubmed_id))  # remove duplicates
    return pubmedID
-
-
-# In[35]:
 
 
 # function to write disease reference to local folder
@@ -303,11 +261,6 @@ def get_reference(disease_entry_number):
                 f.write(record[0]['Id'] + '\t' + record[0]['Title'] + '\n')
                 handle.close()
             
-
-
-# In[16]:
-
-
 # function to get 'fasta' files from designated database and keyword
 def get_fasta_database(databaseName, keyword):
     """
@@ -327,10 +280,6 @@ def get_fasta_database(databaseName, keyword):
         print("The %s %s database has been save." % (keyword, databaseName))
     return db_fasta
 
-
-# In[5]:
-
-
 def summarize_fasta(*files):
     """    
     :param files: 
@@ -346,10 +295,6 @@ def summarize_fasta(*files):
         print("=====================")
     return id_dict
 
-
-# In[17]:
-
-
 # define a function to move files
 def move_files(from_path, to_path, file_name):
     """
@@ -364,10 +309,6 @@ def move_files(from_path, to_path, file_name):
     filelist_in_folder = os.listdir(to_path)
     print("The files have been moved to %s." % to_path)
     return filelist_in_folder
-
-
-# In[4]:
-
 
 # define function to parse .txt blast results
 def analyze_blast_result2(txt_file):
@@ -388,142 +329,61 @@ def analyze_blast_result2(txt_file):
 
 # # Analysis
 
-# In[19]:
-
-
 # get disease entry number for "COVID-19"
 print(get_diseaseEntryNumber('COVID-19'))
-
-
-# In[20]:
-
 
 # Q1. write KEGG annotation file for "COVID-19" 
 get_annotation(get_diseaseEntryNumber('COVID-19'))
 
-
-# In[21]:
-
-
 # gether list of pathwayID for "COVID-19"
 print(get_pathwayID(get_diseaseEntryNumber('COVID-19')))
-
-
-# In[22]:
-
 
 # Q2. write pathway image .pdf file for "COVID-19"
 draw_kegg_map(get_diseaseEntryNumber('COVID-19'))
 
-
-# In[23]:
-
-
 # gether list of networkID
 print(get_networkID(get_diseaseEntryNumber('COVID-19')))
-
-
-# In[24]:
-
 
 # Q3. write annotation of networks as .txt file for "COVID-19"
 print(get_networkAnnotation(get_diseaseEntryNumber('COVID-19')))
 
-
-# In[25]:
-
-
 # gether list of elementID
 print(get_elementID(get_diseaseEntryNumber('COVID-19')))
-
-
-# In[26]:
-
 
 # Q4. return list of gene id and write to .txt file
 print(get_geneID(get_diseaseEntryNumber('COVID-19')))
 
-
-# In[27]:
-
-
 # gether list of metabolite id
 print(get_metaboliteID(get_diseaseEntryNumber('COVID-19')))
-
-
-# In[28]:
-
 
 # gether list of perturbant id
 print(get_perturbantID(get_diseaseEntryNumber('COVID-19')))
 
-
-# In[29]:
-
-
 # gether pubmed id from disease entry number
 print(get_pubmedID(get_diseaseEntryNumber('COVID-19')))
-
-
-# In[38]:
-
 
 #Q7. get pubmedID with its reference title written to .txt file
 print(get_reference(get_diseaseEntryNumber('COVID-19')))
 
-
-# In[39]:
-
-
 # Q5. to get 200 genomic sequence for SARS-CoV-2 as blast database
 print(get_fasta_database(databaseName='nucleotide', keyword='SARS-CoV-2'))
-
-
-# In[40]:
-
 
 # to get 200 NTsequence of S protein
 print(get_fasta_database(databaseName='nucleotide', keyword='SARS-CoV-2 S protein'))
 
-
-# In[6]:
-
-
 # analyze sequence description
 summarize_fasta(file_path+'/SARS-CoV-2 S protein_nucleotide_fasta.txt', file_path+'/SARS-CoV-2_nucleotide_fasta.txt')
-
-
-# In[41]:
-
 
 # move fasta files to cygwin64 home folder for blast
 move_files(from_path=file_path, to_path='C:/cygwin64/home/wen_x', file_name='/SARS-CoV-2 S protein_nucleotide_fasta.txt')
 move_files(from_path=file_path, to_path='C:/cygwin64/home/wen_x', file_name='/SARS-CoV-2_nucleotide_fasta.txt')
 
-
-# In[45]:
-
-
 # move results.xml file back to my file_path for further analysis
 move_files(from_path='C:/cygwin64/home/wen_x', to_path=file_path, file_name='/results.txt')
-
-
-# In[44]:
-
 
 # Q6. analyze blast result
 analyze_blast_result2(file_path + '/results.txt')
 
-
-# In[5]:
-
-
 # additional analysis - tblastx result
 analyze_blast_result2(file_path + '/tblastx_results.txt')
-
-
-# In[ ]:
-
-
-
 
